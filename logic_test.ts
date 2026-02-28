@@ -678,6 +678,41 @@ Deno.test("cleanFolderDetailed reports missing_source as non-fatal", async () =>
   }
 });
 
+Deno.test("cleanFolderDetailed treats missing rename target parent as fatal", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.mkdir(join(root, "keep"), { recursive: true });
+    await Deno.mkdir(join(root, "misc"), { recursive: true });
+
+    await Deno.writeTextFile(join(root, "keep", "stay.txt"), "keep");
+    await Deno.writeTextFile(join(root, "misc", "remove.tmp"), "remove");
+    await Deno.writeTextFile(join(root, "backup.bin"), "backup");
+
+    await Deno.writeTextFile(
+      join(root, KEEPLIST_FILE),
+      [
+        "keep/**",
+        "!rename backup.bin -> restore/live.bin",
+      ].join("\n"),
+    );
+
+    await assertRejects(() => cleanFolderDetailed(root), Error);
+
+    const removedStillMissing = await Deno.stat(join(root, "misc", "remove.tmp"))
+      .then(() => false)
+      .catch(() => true);
+    const sourceStillExists = await Deno.stat(join(root, "backup.bin"))
+      .then(() => true)
+      .catch(() => false);
+
+    assertEquals(removedStillMissing, true);
+    assertEquals(sourceStillExists, true);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("cleanFolderDetailed propagates fatal rename errors without rollback", async () => {
   const root = await Deno.makeTempDir();
 

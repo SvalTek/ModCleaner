@@ -428,8 +428,16 @@ async function applyRenames(
       results.push({ ...rename, applied: true });
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) {
-        results.push({ ...rename, applied: false, reason: "missing_source" });
-        continue;
+        try {
+          await Deno.stat(sourcePath);
+        } catch (sourceError) {
+          if (sourceError instanceof Deno.errors.NotFound) {
+            results.push({ ...rename, applied: false, reason: "missing_source" });
+            continue;
+          }
+
+          throw sourceError;
+        }
       }
       throw error;
     }
