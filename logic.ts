@@ -115,7 +115,7 @@ function validateLiteralRelativePath(
     );
   }
 
-  if (isAbsolute(path)) {
+  if (isAbsolute(path) || /^[A-Za-z]:\//.test(path)) {
     throw new Error(
       `Invalid !rename on line ${lineNumber}: ${side} path must be relative.`,
     );
