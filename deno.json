@@ -2,7 +2,8 @@
   "tasks": {
     "dev": "deno run --allow-read --allow-write --allow-ffi --allow-env --allow-net --watch main.ts",
     "test": "deno test -A",
-    "build": "deno compile --allow-read --allow-write --allow-ffi --allow-env --allow-net --no-terminal ./main.ts ModCleaner"
+    "build": "deno compile --allow-read --allow-write --allow-ffi --allow-env --allow-net --no-terminal --icon assets/ModCleaner.ico -o ./ModCleaner.exe ./main.ts",
+    "build:linux": "deno compile --allow-read --allow-write --allow-ffi --allow-env --allow-net -o ./ModCleaner ./main.ts"
   },
   "imports": {
     "@miyauci/rfd/deno": "jsr:@miyauci/rfd@1/deno",

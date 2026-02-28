@@ -1,4 +1,8 @@
-# ModCleaner
+<div style="display:flex; align-items:center; gap:24px; margin-bottom:24px;">
+  <img src="assets/ModCleaner-medium.png" width="180">
+  <h1 style="margin:0;">ModCleaner</h1>
+</div>
+<br />
 
 ModCleaner is a small desktop utility for cleaning a game folder with a simple keep-list.
 

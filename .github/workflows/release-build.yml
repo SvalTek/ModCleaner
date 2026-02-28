@@ -1,0 +1,50 @@
+name: Build and Attach Deno Binary to Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v2.x
+
+      - name: Build binary
+        if: runner.os != 'Windows'
+        run: deno task build:linux
+
+      - name: Build binary
+        if: runner.os == 'Windows'
+        run: deno task build
+
+      # Set correct binary name per platform for upload
+      - name: Set binary name
+        id: binname
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            echo "binary=ModCleaner.exe" >> $GITHUB_OUTPUT
+          else
+            echo "binary=ModCleaner" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Upload ModCleaner binary to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ steps.binname.outputs.binary }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
