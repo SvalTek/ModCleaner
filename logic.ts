@@ -1,4 +1,5 @@
 import {
+  dirname,
   globToRegExp,
   isAbsolute,
   join,
@@ -7,6 +8,25 @@ import {
 } from "@std/path";
 
 export const KEEPLIST_FILE = "#keeplist.txt";
+export const GENERATED_KEEPLIST_HEADER = [
+  "# This file defines which files should be preserved during the Clean operation.",
+  "# The !rename directive specifies a literal backup restore rule.",
+  "",
+  "# !rename directives restore backups only if the target file is absent.",
+  "# To restore vanilla files (e.g. remove a modloader proxy),",
+  "# comment out the keep rule for the target file and run Clean.",
+  "# Example: modloader proxy toggle",
+  "",
+  "# common_proxy.dll",
+  "# !rename common_proxy.dll.orig -> common_proxy.dll",
+  "",
+  "# Explanation:",
+  "# - While common_proxy.dll is listed as a keep rule, it will be preserved.",
+  "# - The !rename directive will only apply if common_proxy.dll does not exist.",
+  "# - To restore the original file from common_proxy.dll.orig,",
+  "#   comment out the keep rule and run Clean.",
+  "# Note: comments must be a # followed by a single space (some games use filenames with #, so the space is necessary to avoid confusion).",
+].join("\n");
 
 export type RenameDirective = {
   from: string;
@@ -68,7 +88,8 @@ export async function listRelativeFiles(root: string): Promise<string[]> {
 
 export async function writeKeeplist(root: string): Promise<string[]> {
   const files = await listRelativeFiles(root);
-  await Deno.writeTextFile(join(root, KEEPLIST_FILE), `${files.join("\n")}\n`);
+  const lines = [GENERATED_KEEPLIST_HEADER, "", ...files];
+  await Deno.writeTextFile(join(root, KEEPLIST_FILE), `${lines.join("\n")}\n`);
   return files;
 }
 
@@ -235,6 +256,70 @@ function normalizeRule(rule: string): string {
   return normalized;
 }
 
+async function isEmptyFolder(path: string): Promise<boolean> {
+  try {
+    for await (const _ of Deno.readDir(path)) {
+      return false;
+    }
+    return true;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function collectCandidateParentDirs(removedFiles: string[]): string[] {
+  const dirs = new Set<string>();
+
+  for (const file of removedFiles) {
+    let current = dirname(file).replaceAll("\\", "/");
+    while (current && current !== "." && current !== "/") {
+      dirs.add(current);
+      const next = dirname(current).replaceAll("\\", "/");
+      if (next === current) {
+        break;
+      }
+      current = next;
+    }
+  }
+
+  return Array.from(dirs).sort((a, b) => {
+    const depthA = a.split("/").length;
+    const depthB = b.split("/").length;
+    if (depthA !== depthB) {
+      return depthB - depthA;
+    }
+    return a.localeCompare(b);
+  });
+}
+
+async function pruneEmptyParentDirs(
+  root: string,
+  removedFiles: string[],
+): Promise<void> {
+  const candidateDirs = collectCandidateParentDirs(removedFiles);
+
+  for (const dir of candidateDirs) {
+    const fullPath = join(root, dir);
+
+    if (!(await isEmptyFolder(fullPath))) {
+      continue;
+    }
+
+    try {
+      await Deno.remove(fullPath);
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) {
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+
 function compileRule(rule: string): RegExp | null {
   const normalizedRule = normalizeRule(rule);
   if (!normalizedRule) {
@@ -361,6 +446,8 @@ export async function cleanFolderDetailed(root: string): Promise<CleanResult> {
   }
 
   const renameResults = await applyRenames(root, plan.plannedRenames);
+
+  await pruneEmptyParentDirs(root, plan.removableFiles);
 
   return {
     removedFiles: plan.removableFiles,

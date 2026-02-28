@@ -9,6 +9,7 @@
     "@std/assert": "jsr:@std/assert@1",
     "@std/fs": "jsr:@std/fs@^1.0.23",
     "@std/path": "jsr:@std/path@1",
+    "@std/testing/mock": "jsr:@std/testing@1/mock",
     "@zip-js/zip-js": "jsr:@zip-js/zip-js@^2.8.21",
     "WebUI": "https://deno.land/x/webui/mod.ts"
   }
