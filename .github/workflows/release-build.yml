@@ -21,6 +21,11 @@ jobs:
           deno-version: v2.x
 
       - name: Build binary
+        if: runner.os != 'Windows'
+        run: deno task build:linux
+
+      - name: Build binary
+        if: runner.os == 'Windows'
         run: deno task build
 
       # Set correct binary name per platform for upload
