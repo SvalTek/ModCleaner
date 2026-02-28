@@ -483,7 +483,7 @@ function runCleanReady(event: WebUI.Event, isReady: boolean): void {
 }
 
 async function showCleanupConfirmation(event: WebUI.Event): Promise<boolean> {
-  const confirmedValue = await event.window.script(`
+  const confirmedValue: unknown = await event.window.script(`
     return showConfirmDialog(
       "Confirm Cleanup",
       "This will permanently delete files that are not covered by #keeplist.txt. Continue?",
@@ -491,7 +491,8 @@ async function showCleanupConfirmation(event: WebUI.Event): Promise<boolean> {
     );
   `);
 
-  return confirmedValue === true || confirmedValue === "true";
+  return confirmedValue === true ||
+    (typeof confirmedValue === "string" && confirmedValue === "true");
 }
 
 function runResults(
