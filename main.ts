@@ -26,6 +26,9 @@ const html = `<!DOCTYPE html>
   --error-border: #9f4b4b;
   --info-bg: #1e304a;
   --info-border: #3d6ea7;
+  --z-results-sticky: 10;
+  --z-modal-backdrop: 9998;
+  --z-modal: 9999;
 }
 * {
   box-sizing: border-box;
@@ -172,7 +175,7 @@ button.danger:hover:not(:disabled) {
 .results-header {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-results-sticky);
   padding: 10px 12px;
   background: #212733;
   font-size: 13px;
@@ -221,6 +224,7 @@ button.danger:hover:not(:disabled) {
 .modal-backdrop {
   position: fixed;
   inset: 0;
+  z-index: var(--z-modal-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -232,6 +236,8 @@ button.danger:hover:not(:disabled) {
   display: none;
 }
 .modal {
+  position: relative;
+  z-index: var(--z-modal);
   width: min(420px, 100%);
   background: linear-gradient(180deg, #232833 0%, #1a1f28 100%);
   border: 1px solid var(--border);
