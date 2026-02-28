@@ -194,7 +194,8 @@ deno task build
 
 ## Current Platform Notes
 
-The project is packaged as a desktop app and appears aimed at local game folders on Windows-style setups, though the core path handling normalizes separators and uses relative-path matching.
+The project is packaged as a desktop app for Windows. A Linux build has been provided and due to the way the logic is structured, it should work on Linux as well. (Untested)
+A macOS build is not currently planned though it may run fine if built from source.
 
 ## Summary
 
