@@ -227,6 +227,12 @@ deno task test
 deno task build
 ```
 
+Manual UI regression check for scan/clean results rendering:
+
+1. Create a test file whose name includes `<` and `>` in the target game folder.
+2. Run `Scan` so the file appears under `Files To Remove`.
+3. Confirm the results list renders the filename literally (including angle brackets) instead of interpreting it as HTML.
+
 ## Project Structure
 
 - `main.ts` - desktop UI and command orchestration
