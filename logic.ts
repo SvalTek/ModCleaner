@@ -8,6 +8,7 @@ import {
 } from "@std/path";
 
 export const KEEPLIST_FILE = "#keeplist.txt";
+export const QUARANTINE_DIR = ".modcleaner_quarantine";
 export const GENERATED_KEEPLIST_HEADER = [
   "# This file defines which files should be preserved during the Clean operation.",
   "# The !rename directive specifies a literal backup restore rule.",
@@ -48,12 +49,49 @@ export type RenameExecutionResult = {
 export type CleanResult = {
   removedFiles: string[];
   renameResults: RenameExecutionResult[];
+  mode: CleanMode;
+  quarantineRunId?: string;
+};
+
+export type CleanMode = "delete" | "quarantine";
+
+export type CleanFolderDetailedOptions = {
+  mode?: CleanMode;
+  keeplistName?: string;
 };
 
 type KeeplistConfig = {
   keepRules: string[];
   renameDirectives: RenameDirective[];
 };
+
+function validateKeeplistName(keeplistName: string): void {
+  // Reject names with leading or trailing whitespace so that validation
+  // and subsequent filesystem operations use the same literal value.
+  if (keeplistName !== keeplistName.trim()) {
+    throw new Error(
+      `Invalid keeplist name: ${keeplistName}. Leading or trailing whitespace is not allowed.`,
+    );
+  }
+
+  const normalized = keeplistName.trim();
+  if (
+    normalized !== KEEPLIST_FILE &&
+    !/^#[A-Za-z0-9_-]+-keeplist\.txt$/.test(normalized)
+  ) {
+    throw new Error(
+      `Invalid keeplist name: ${normalized}. Expected #keeplist.txt or #<prefix>-keeplist.txt.`,
+    );
+  }
+}
+
+export function resolveKeeplistName(prefix: string | null): string {
+  if (!prefix) {
+    return KEEPLIST_FILE;
+  }
+
+  return `#${prefix}-keeplist.txt`;
+}
 
 export async function walkFiles(root: string): Promise<string[]> {
   const files: string[] = [];
@@ -66,6 +104,12 @@ export async function walkFiles(root: string): Promise<string[]> {
         continue;
       }
       if (entry.isDirectory) {
+        const relPath = relative(root, fullPath).replaceAll("\\", "/");
+        if (
+          relPath === QUARANTINE_DIR || relPath.startsWith(`${QUARANTINE_DIR}/`)
+        ) {
+          continue;
+        }
         await walk(fullPath);
       }
     }
@@ -86,10 +130,14 @@ export async function listRelativeFiles(root: string): Promise<string[]> {
     .sort((a, b) => a.localeCompare(b));
 }
 
-export async function writeKeeplist(root: string): Promise<string[]> {
+export async function writeKeeplist(
+  root: string,
+  keeplistName = KEEPLIST_FILE,
+): Promise<string[]> {
+  validateKeeplistName(keeplistName);
   const files = await listRelativeFiles(root);
   const lines = [GENERATED_KEEPLIST_HEADER, "", ...files];
-  await Deno.writeTextFile(join(root, KEEPLIST_FILE), `${lines.join("\n")}\n`);
+  await Deno.writeTextFile(join(root, keeplistName), `${lines.join("\n")}\n`);
   return files;
 }
 
@@ -214,29 +262,39 @@ function parseKeeplist(text: string): KeeplistConfig {
   return { keepRules, renameDirectives };
 }
 
-async function readKeeplistConfig(root: string): Promise<KeeplistConfig> {
-  const text = await Deno.readTextFile(join(root, KEEPLIST_FILE));
+async function readKeeplistConfig(
+  root: string,
+  keeplistName: string,
+): Promise<KeeplistConfig> {
+  validateKeeplistName(keeplistName);
+  const text = await Deno.readTextFile(join(root, keeplistName));
   return parseKeeplist(text);
 }
 
-export async function readKeeplist(root: string): Promise<string[]> {
-  const config = await readKeeplistConfig(root);
+export async function readKeeplist(
+  root: string,
+  keeplistName = KEEPLIST_FILE,
+): Promise<string[]> {
+  const config = await readKeeplistConfig(root, keeplistName);
   return config.keepRules;
 }
 
-async function readValidatedKeeplist(root: string): Promise<KeeplistConfig> {
+async function readValidatedKeeplist(
+  root: string,
+  keeplistName: string,
+): Promise<KeeplistConfig> {
   let config: KeeplistConfig;
   try {
-    config = await readKeeplistConfig(root);
+    config = await readKeeplistConfig(root, keeplistName);
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) {
-      throw new Error(`${KEEPLIST_FILE} not found. Generate keeplist first.`);
+      throw new Error(`${keeplistName} not found. Generate keeplist first.`);
     }
     throw error;
   }
 
   if (config.keepRules.length === 0) {
-    throw new Error(`${KEEPLIST_FILE} is empty. Add at least one keep rule.`);
+    throw new Error(`${keeplistName} is empty. Add at least one keep rule.`);
   }
 
   return config;
@@ -319,7 +377,6 @@ async function pruneEmptyParentDirs(
   }
 }
 
-
 function compileRule(rule: string): RegExp | null {
   const normalizedRule = normalizeRule(rule);
   if (!normalizedRule) {
@@ -359,10 +416,21 @@ function isKeptWithMatchers(path: string, matchers: RegExp[]): boolean {
   return matchers.some((matcher) => matcher.test(normalizedPath));
 }
 
+function isProtectedKeeplistPath(path: string): boolean {
+  const normalizedPath = path.replaceAll("\\", "/");
+  if (normalizedPath.includes("/")) {
+    return false;
+  }
+
+  return normalizedPath === KEEPLIST_FILE ||
+    /^#[A-Za-z0-9_-]+-keeplist\.txt$/.test(normalizedPath);
+}
+
 export function getRemovableFiles(
   files: string[],
   rules: string[],
   protectedPaths: Iterable<string> = [],
+  keeplistName = KEEPLIST_FILE,
 ): string[] {
   const matchers = compileKeepRules(rules);
   const protectedSet = new Set(
@@ -370,7 +438,7 @@ export function getRemovableFiles(
   );
 
   return files.filter((file) => {
-    if (file === KEEPLIST_FILE) {
+    if (file === keeplistName || isProtectedKeeplistPath(file)) {
       return false;
     }
     if (protectedSet.has(file.replaceAll("\\", "/"))) {
@@ -384,22 +452,30 @@ function protectedPathsFromRenames(renames: RenameDirective[]): string[] {
   return renames.flatMap((rename) => [rename.from, rename.to]);
 }
 
-export async function buildScanPlan(root: string): Promise<ScanPlan> {
+export async function buildScanPlan(
+  root: string,
+  keeplistName = KEEPLIST_FILE,
+): Promise<ScanPlan> {
+  validateKeeplistName(keeplistName);
   const files = await listRelativeFiles(root);
-  const config = await readValidatedKeeplist(root);
+  const config = await readValidatedKeeplist(root, keeplistName);
 
   return {
     removableFiles: getRemovableFiles(
       files,
       config.keepRules,
       protectedPathsFromRenames(config.renameDirectives),
+      keeplistName,
     ),
     plannedRenames: config.renameDirectives,
   };
 }
 
-export async function scanForRemoval(root: string): Promise<string[]> {
-  const plan = await buildScanPlan(root);
+export async function scanForRemoval(
+  root: string,
+  keeplistName = KEEPLIST_FILE,
+): Promise<string[]> {
+  const plan = await buildScanPlan(root, keeplistName);
   return plan.removableFiles;
 }
 
@@ -432,7 +508,11 @@ async function applyRenames(
           await Deno.stat(sourcePath);
         } catch (sourceError) {
           if (sourceError instanceof Deno.errors.NotFound) {
-            results.push({ ...rename, applied: false, reason: "missing_source" });
+            results.push({
+              ...rename,
+              applied: false,
+              reason: "missing_source",
+            });
             continue;
           }
 
@@ -446,11 +526,50 @@ async function applyRenames(
   return results;
 }
 
-export async function cleanFolderDetailed(root: string): Promise<CleanResult> {
-  const plan = await buildScanPlan(root);
+function buildQuarantineRunId(): string {
+  return new Date().toISOString().replaceAll(":", "-");
+}
 
-  for (const file of plan.removableFiles) {
-    await Deno.remove(join(root, file));
+async function quarantineFiles(
+  root: string,
+  removableFiles: string[],
+): Promise<string | undefined> {
+  if (removableFiles.length === 0) {
+    return undefined;
+  }
+
+  const runId = buildQuarantineRunId();
+  const quarantineRoot = join(root, QUARANTINE_DIR, runId);
+
+  for (const file of removableFiles) {
+    const sourcePath = join(root, file);
+    const targetPath = join(quarantineRoot, file);
+    await Deno.mkdir(dirname(targetPath), { recursive: true });
+    await Deno.rename(sourcePath, targetPath);
+  }
+
+  return runId;
+}
+
+export async function cleanFolderDetailed(
+  root: string,
+  options: CleanFolderDetailedOptions = {},
+): Promise<CleanResult> {
+  const plan = await buildScanPlan(root, options.keeplistName ?? KEEPLIST_FILE);
+  const mode = options.mode ?? "delete";
+
+  if (mode !== "delete" && mode !== "quarantine") {
+    throw new Error(`Invalid clean mode: ${mode}`);
+  }
+
+  let quarantineRunId: string | undefined;
+
+  if (mode === "delete") {
+    for (const file of plan.removableFiles) {
+      await Deno.remove(join(root, file));
+    }
+  } else {
+    quarantineRunId = await quarantineFiles(root, plan.removableFiles);
   }
 
   const renameResults = await applyRenames(root, plan.plannedRenames);
@@ -460,10 +579,15 @@ export async function cleanFolderDetailed(root: string): Promise<CleanResult> {
   return {
     removedFiles: plan.removableFiles,
     renameResults,
+    mode,
+    quarantineRunId,
   };
 }
 
-export async function cleanFolder(root: string): Promise<string[]> {
-  const result = await cleanFolderDetailed(root);
+export async function cleanFolder(
+  root: string,
+  keeplistName = KEEPLIST_FILE,
+): Promise<string[]> {
+  const result = await cleanFolderDetailed(root, { keeplistName });
   return result.removedFiles;
 }

@@ -6,7 +6,7 @@
 
 ModCleaner is a small desktop utility for cleaning a game folder with a simple keep-list.
 
-It works by comparing the current contents of a game directory against a `#keeplist.txt` file. Anything not covered by the keeplist is treated as removable. This makes it useful for returning a heavily modded game install to a known-good state without manually sorting through every file.
+It works by comparing the current contents of a game directory against the active keeplist file. By default that file is `#keeplist.txt`. If a keeplist prefix is active, the file becomes `#<prefix>-keeplist.txt`. Anything not covered by the active keeplist is treated as removable. This makes it useful for returning a heavily modded game install to a known-good state without manually sorting through every file.
 
 ## What It Does
 
@@ -18,13 +18,16 @@ ModCleaner provides three main actions:
 
 ### Generate Keeplist
 
-Creates or overwrites `#keeplist.txt` inside the selected game folder.
+Creates or overwrites the active keeplist inside the selected game folder.
 
 The generated file contains the current folder contents as relative paths. In other words, it takes a snapshot of what exists right now and treats those paths as files to preserve later.
 
+> [!IMPORTANT]
+> `Generate Keeplist` overwrites the active keeplist file. If you maintain manual keep rules or `!rename` directives, keep a copy or re-add them after generating.
+
 ### Scan
 
-Reads `#keeplist.txt`, evaluates the keep rules, and shows:
+Reads the active keeplist, evaluates the keep rules, and shows:
 
 - planned file removals
 - planned rename operations
@@ -35,17 +38,25 @@ Reads `#keeplist.txt`, evaluates the keep rules, and shows:
 
 Applies the current cleanup plan:
 
-- deletes files not covered by the keeplist
+- removes files not covered by the keeplist
 - applies any valid `!rename` directives
-- removes empty parent directories left behind by deleted files
+- removes empty parent directories left behind by removed files
 
-`Clean` is destructive. Deleted files are not moved to a recycle bin.
+`Clean` supports two modes:
+
+- `Delete` permanently removes files
+- `Quarantine` moves files into `.modcleaner_quarantine/<timestamp>/` inside the selected game folder
+
+Neither mode uses the OS recycle bin.
+
+> [!WARNING]
+> `Delete` permanently removes files. `Quarantine` is safer because it moves removable files into `.modcleaner_quarantine/<timestamp>/`, but it is not a full rollback system.
 
 ## Intended Workflow
 
 1. Select your game folder.
 2. Run `Generate Keeplist` to capture the current files.
-3. Edit `#keeplist.txt` if needed.
+3. Edit the active keeplist if needed.
 4. Run `Scan` to review what would happen.
 5. Run `Clean` only after confirming the scan output.
 
@@ -59,22 +70,45 @@ A common pattern is:
 
 This tool is snapshot-based.
 
-That means if you install new mods or add files after generating `#keeplist.txt`, those new files are not automatically preserved. If you want to keep them, you must either:
+> [!IMPORTANT]
+> If you add mods or other files after generating the active keeplist, those files are not automatically preserved. Regenerate the keeplist or add keep rules manually before cleaning.
+
+If you want to keep them, you must either:
 
 - regenerate the keeplist, or
 - add keep rules manually
 
 Also:
 
-- `#keeplist.txt` is never deleted by the cleaner
-- `Scan` requires a valid `#keeplist.txt`
-- `Clean` requires a valid `#keeplist.txt`
+- keeplist files matching `#keeplist.txt` or `#<prefix>-keeplist.txt` are never deleted by the cleaner.
+- `Scan` requires a valid active keeplist
+- `Clean` requires a valid active keeplist
 - an empty keeplist is treated as an error
 - file ordering and planning are deterministic
 
+### Keeplist Prefixes
+
+ModCleaner supports an optional in-memory keeplist prefix system.
+
+- default keeplist: `#keeplist.txt`
+- prefixed keeplist: `#<prefix>-keeplist.txt`
+
+The prefix UI is intentionally hidden behind `Ctrl+K`. This is to avoid confusion for users who just want a single keeplist file.
+If you want to use prefixes, press `Ctrl+K` and enter a prefix to switch to a different keeplist file. You can have as many keeplist files as you want, but only one is active at a time.
+
+> [!NOTE]
+> Keeplist prefixes are an advanced feature. They do not add extra scanning behavior; they only change which keeplist filename `Generate`, `Scan`, and `Clean` use.
+
+Rules:
+
+- prefixes are stored in memory only
+- an empty prefix returns to `#keeplist.txt`
+- valid prefixes may contain only letters, numbers, `_`, and `-`
+- invalid prefixes are rejected and do not change the active keeplist
+
 ## Keeplist Format
 
-`#keeplist.txt` is line-based.
+The active keeplist is line-based.
 
 Blank lines are ignored.
 
@@ -150,7 +184,11 @@ A rename can end in one of these states:
 
 Other rename I/O failures are fatal.
 
-There is no rollback for partial progress during `Clean`. (This is why `Scan` is important to review beforehand. This may be improved in the future.)
+There is no automatic rollback for partial progress during `Clean`.
+
+In `Delete` mode, removed files are gone unless you have your own backup or can restore them another way.
+
+In `Quarantine` mode, removed files are moved into `.modcleaner_quarantine/<timestamp>/`, which gives you a manual recovery path, but rename operations and other partial-progress cases are still not rolled back automatically.
 
 ## Example Keeplist
 
@@ -168,11 +206,14 @@ mods/**
 
 Review the scan output before cleaning.
 
-This tool permanently deletes files that are not matched by the keeplist. It is best used when:
+> [!WARNING]
+> `Scan` is the review step. `Clean` applies the current plan and does not provide automatic rollback for partial progress.
+
+This tool can permanently delete files that are not matched by the keeplist. It is best used when:
 
 - you understand the folder you are targeting
-- you have a backup or can re-verify game files if needed
-- you have reviewed `#keeplist.txt`
+- you have a backup, can re-verify game files, or are intentionally using quarantine mode
+- you have reviewed the active keeplist
 
 ## Development
 
@@ -203,4 +244,4 @@ ModCleaner is a deterministic keep-list cleaner for game folders.
 
 It does not try to detect which files are mods automatically. Instead, it gives you a simple rule:
 
-If a file is not covered by `#keeplist.txt`, it is removable.
+If a file is not covered by the active keeplist, it is removable.

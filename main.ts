@@ -1,6 +1,13 @@
 import { WebUI } from "WebUI";
 import { FileDialog, load as loadNativeDialog } from "@miyauci/rfd/deno";
-import { buildScanPlan, cleanFolderDetailed, writeKeeplist } from "./logic.ts";
+import {
+  buildScanPlan,
+  cleanFolderDetailed,
+  type CleanMode,
+  QUARANTINE_DIR,
+  resolveKeeplistName,
+  writeKeeplist,
+} from "./logic.ts";
 
 const html = `<!DOCTYPE html>
 <html>
@@ -95,6 +102,22 @@ input {
   color: var(--text);
   font-size: 14px;
 }
+select {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #181b21;
+  color: var(--text);
+  font-size: 14px;
+}
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
 input:focus {
   outline: none;
   border-color: var(--accent);
@@ -139,6 +162,46 @@ button.danger:hover:not(:disabled) {
   margin-top: 12px;
   display: flex;
   gap: 10px;
+}
+.prefix-toolbar {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+.prefix-active {
+  color: var(--muted);
+  font-size: 13px;
+}
+.prefix-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.prefix-row {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+}
+.prefix-input-wrap {
+  flex: 1;
+}
+.prefix-error {
+  margin-top: 8px;
+  color: #f0a3a3;
+  font-size: 13px;
+}
+.mode-row {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.mode-help {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
 }
 .actions .danger-wrap {
   margin-left: auto;
@@ -274,6 +337,10 @@ button.danger:hover:not(:disabled) {
   .actions {
     flex-wrap: wrap;
   }
+  .prefix-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
   .actions .danger-wrap {
     margin-left: 0;
     padding-left: 0;
@@ -290,7 +357,7 @@ button.danger:hover:not(:disabled) {
 <div class="container">
   <header class="app-header">
     <h1>ModCleaner</h1>
-    <div class="subtitle">Scan and clean game folders using <code>#keeplist.txt</code> rules.</div>
+    <div class="subtitle">Scan and clean game folders using the active keeplist rules.</div>
   </header>
 
   <section class="card">
@@ -298,6 +365,21 @@ button.danger:hover:not(:disabled) {
     <div class="folder-row">
       <input id="gamePath" placeholder="Select a game folder" oninput="markScanDirty()" />
       <button class="secondary" onclick="browseFolder(document.getElementById('gamePath').value || '')">Browse</button>
+    </div>
+
+    <div class="prefix-toolbar">
+      <div class="prefix-active" id="activeKeeplistName">Active keeplist: <code>#keeplist.txt</code></div>
+    </div>
+
+    <div class="prefix-panel" id="prefixPanel" hidden>
+      <div class="prefix-row">
+        <div class="prefix-input-wrap">
+          <label class="section-label" for="keeplistPrefix">Keeplist prefix</label>
+          <input id="keeplistPrefix" placeholder="Keeplist prefix" autocomplete="off" spellcheck="false" oninput="handlePrefixInput()" />
+        </div>
+        <button class="secondary" id="prefixCancelButton" type="button" onclick="clearPrefix()">Cancel</button>
+      </div>
+      <div class="prefix-error" id="prefixError" hidden></div>
     </div>
 
     <div class="actions">
@@ -308,30 +390,39 @@ button.danger:hover:not(:disabled) {
       </div>
     </div>
 
+    <div class="mode-row">
+      <label class="section-label" for="cleanMode" style="margin: 0; min-width: 130px;">Clean Mode</label>
+      <select id="cleanMode" onchange="updateCleanModeHelp()">
+        <option value="delete">Delete (permanent)</option>
+        <option value="quarantine">Quarantine (move files)</option>
+      </select>
+    </div>
+    <div class="mode-help" id="cleanModeHelp"></div>
+
     <div class="status" id="status" data-type="info">Idle</div>
 
     <details class="details">
       <summary>How It Works</summary>
       <div class="details-content">
         <div>This tool uses a snapshot-style keep system.</div>
-        <div>Only files matching <code>#keeplist.txt</code> rules are preserved.</div>
-        <div>If you install new mods or add files you want to keep, update <code>#keeplist.txt</code> first.</div>
+        <div>Only files matching the active keeplist rules are preserved.</div>
+        <div>If you install new mods or add files you want to keep, update the active keeplist first.</div>
         <div>You can do that by running <code>Generate Keeplist</code> again or adding wildcard rules manually.</div>
         <hr />
-        <div><code>Generate Keeplist</code> writes <code>#keeplist.txt</code> into the selected game folder.</div>
+        <div><code>Generate Keeplist</code> writes the active keeplist into the selected game folder.</div>
         <div>Each line is a keep rule. Files matching any rule are preserved.</div>
         <div>Supported patterns:</div>
         <div><code>*</code> matches within one path segment. Example: <code>BepInEx/plugins/*.dll</code></div>
         <div><code>**</code> matches across nested folders. Example: <code>mods/**</code></div>
         <div>Trailing slash is treated as recursive. Example: <code>mods/</code> equals <code>mods/**</code></div>
-        <div><code>#keeplist.txt</code> is overwritten each time you generate. Add manual wildcard rules after generating if needed.</div>
+        <div>The active keeplist is overwritten each time you generate. Add manual wildcard rules after generating if needed.</div>
         <div>Every non-empty line is treated as a rule. Lines starting with <code># </code> are comments. Blank lines are ignored.</div>
         <div>Literal rename directives are supported: <code>!rename Game/Binaries/Win64/exchndl-original.dll -> Game/Binaries/Win64/exchndl.dll</code></div>
         <div><code>!rename</code> paths are relative-only and do not support wildcards.</div>
         <hr />
-        <div><code>Scan</code> checks the folder against <code>#keeplist.txt</code> and lists files that would be removed.</div>
-        <div><code>Scan</code> and <code>Clean</code> require <code>#keeplist.txt</code> to exist and contain at least one rule.</div>
-        <div><code>Clean</code> permanently deletes files not matching any keep rule. Use with caution.</div>
+        <div><code>Scan</code> checks the folder against the active keeplist and lists files that would be removed.</div>
+        <div><code>Scan</code> and <code>Clean</code> require the active keeplist to exist and contain at least one rule.</div>
+        <div><code>Clean</code> can permanently delete files or move them into <code>${QUARANTINE_DIR}/&lt;timestamp&gt;</code>.</div>
       </div>
     </details>
   </section>
@@ -359,6 +450,86 @@ button.danger:hover:not(:disabled) {
 let confirmResolver = null;
 let cleanReady = false;
 let busy = false;
+let keeplistPrefix = null;
+let prefixValidationError = "";
+
+function getResolvedKeeplistName() {
+  return keeplistPrefix ? \`#\${keeplistPrefix}-keeplist.txt\` : "#keeplist.txt";
+}
+
+function getPrefixValidationError() {
+  return prefixValidationError;
+}
+
+function updateActiveKeeplistName() {
+  const el = document.getElementById("activeKeeplistName");
+  if (!el) {
+    return;
+  }
+
+  el.innerHTML = \`Active keeplist: <code>\${getResolvedKeeplistName()}</code>\`;
+}
+
+function setPrefixValidationError(message) {
+  prefixValidationError = message;
+  const el = document.getElementById("prefixError");
+  if (!el) {
+    return;
+  }
+
+  el.innerText = message;
+  el.hidden = !message;
+}
+
+function applyPrefixValue(rawValue) {
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    keeplistPrefix = null;
+    setPrefixValidationError("");
+    updateActiveKeeplistName();
+    return true;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  if (!/^[a-z0-9_-]+$/.test(normalized)) {
+    setPrefixValidationError("Prefix must use only letters, numbers, underscores, or hyphens.");
+    updateActiveKeeplistName();
+    return false;
+  }
+
+  keeplistPrefix = normalized;
+  setPrefixValidationError("");
+  updateActiveKeeplistName();
+  return true;
+}
+
+function handlePrefixInput() {
+  applyPrefixValue(document.getElementById("keeplistPrefix")?.value || "");
+  markScanDirty();
+}
+
+function clearPrefix() {
+  const input = document.getElementById("keeplistPrefix");
+  if (input) {
+    input.value = "";
+  }
+  keeplistPrefix = null;
+  setPrefixValidationError("");
+  updateActiveKeeplistName();
+  markScanDirty();
+}
+
+function togglePrefixPanel() {
+  const panel = document.getElementById("prefixPanel");
+  if (!panel) {
+    return;
+  }
+
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) {
+    document.getElementById("keeplistPrefix")?.focus();
+  }
+}
 
 function setStatus(msg, type = "info") {
   document.getElementById("status").innerText = msg;
@@ -366,13 +537,39 @@ function setStatus(msg, type = "info") {
 }
 function setBusy(isBusy) {
   busy = Boolean(isBusy);
-  const ids = ["generateButton", "scanButton", "cleanButton"];
+  const ids = [
+    "generateButton",
+    "scanButton",
+    "cleanButton",
+    "prefixCancelButton",
+    "keeplistPrefix",
+  ];
   ids.forEach((id) => {
     const el = document.getElementById(id);
     if (el) {
       el.disabled = busy || (id === "cleanButton" && !cleanReady);
     }
   });
+}
+
+function getSelectedCleanMode() {
+  const mode = document.getElementById("cleanMode")?.value;
+  return mode === "quarantine" ? "quarantine" : "delete";
+}
+
+function updateCleanModeHelp() {
+  const mode = getSelectedCleanMode();
+  const help = document.getElementById("cleanModeHelp");
+  if (!help) {
+    return;
+  }
+
+  if (mode === "delete") {
+    help.innerText = "Warning: Delete mode permanently removes files after confirmation.";
+    return;
+  }
+
+  help.innerText = "Quarantine mode moves removable files to ${QUARANTINE_DIR}/<timestamp>/ under the selected game folder.";
 }
 function setCleanReady(isReady) {
   cleanReady = Boolean(isReady);
@@ -456,17 +653,22 @@ document.getElementById("confirmModal").addEventListener("click", (event) => {
 
 document.addEventListener("keydown", (event) => {
   const modal = document.getElementById("confirmModal");
-  if (modal.hidden) {
-    return;
-  }
-  if (event.key === "Escape") {
+  if (!modal.hidden && event.key === "Escape") {
     event.preventDefault();
     resolveConfirm("false");
+    return;
+  }
+
+  if (event.ctrlKey && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    togglePrefixPanel();
   }
 });
 
 setResults({ removals: [], renames: [] });
 setCleanReady(false);
+updateCleanModeHelp();
+updateActiveKeeplistName();
 </script>
 </body>
 </html>
@@ -477,7 +679,9 @@ function runStatus(
   message: string,
   type: "info" | "success" | "error" = "info",
 ): void {
-  event.window.run(`setStatus(${JSON.stringify(message)}, ${JSON.stringify(type)})`);
+  event.window.run(
+    `setStatus(${JSON.stringify(message)}, ${JSON.stringify(type)})`,
+  );
 }
 
 function runBusy(event: WebUI.Event, isBusy: boolean): void {
@@ -488,17 +692,78 @@ function runCleanReady(event: WebUI.Event, isReady: boolean): void {
   event.window.run(`setCleanReady(${JSON.stringify(isReady)})`);
 }
 
-async function showCleanupConfirmation(event: WebUI.Event): Promise<boolean> {
+async function getKeeplistState(
+  event: WebUI.Event,
+): Promise<{ keeplistName: string; prefixError: string }> {
+  const value = await event.window.script(`
+    return JSON.stringify({
+      keeplistName: getResolvedKeeplistName(),
+      prefixError: getPrefixValidationError(),
+    });
+  `);
+
+  if (typeof value !== "string") {
+    return { keeplistName: resolveKeeplistName(null), prefixError: "" };
+  }
+
+  let state: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(value);
+    if (typeof parsed !== "object" || parsed === null) {
+      return { keeplistName: resolveKeeplistName(null), prefixError: "" };
+    }
+    state = parsed as Record<string, unknown>;
+  } catch {
+    return { keeplistName: resolveKeeplistName(null), prefixError: "" };
+  }
+
+  const keeplistName = typeof state.keeplistName === "string"
+    ? state.keeplistName
+    : resolveKeeplistName(null);
+  const prefixError = typeof state.prefixError === "string"
+    ? state.prefixError
+    : "";
+
+  return { keeplistName, prefixError };
+}
+
+async function requireKeeplistName(event: WebUI.Event): Promise<string | null> {
+  const { keeplistName, prefixError } = await getKeeplistState(event);
+  if (prefixError) {
+    runStatus(event, `Invalid keeplist prefix: ${prefixError}`, "error");
+    return null;
+  }
+
+  return keeplistName;
+}
+
+async function showCleanupConfirmation(
+  event: WebUI.Event,
+  keeplistName: string,
+): Promise<boolean> {
+  const mode = await getCleanMode(event);
+  const message = mode === "delete"
+    ? `Delete mode permanently removes files that are not covered by ${keeplistName}. Continue?`
+    : `Quarantine mode moves removable files to ${QUARANTINE_DIR}/<timestamp>/ inside the selected game folder. Continue?`;
+
   const confirmedValue: unknown = await event.window.script(`
     return showConfirmDialog(
       "Confirm Cleanup",
-      "This will permanently delete files that are not covered by #keeplist.txt. Continue?",
+      ${JSON.stringify(message)},
       "Clean"
     );
   `);
 
   return confirmedValue === true ||
     (typeof confirmedValue === "string" && confirmedValue === "true");
+}
+
+async function getCleanMode(event: WebUI.Event): Promise<CleanMode> {
+  const value = await event.window.script(
+    "return (document.getElementById('cleanMode')?.value || 'delete');",
+  );
+
+  return value === "quarantine" ? "quarantine" : "delete";
 }
 
 function runResults(
@@ -522,6 +787,7 @@ async function getRootPath(event: WebUI.Event): Promise<string> {
 }
 
 let lastScannedRoot: string | null = null;
+let lastScannedKeeplistName: string | null = null;
 
 async function browseFolder(event: WebUI.Event): Promise<void> {
   const currentPath = event.arg.string(0).trim();
@@ -545,6 +811,7 @@ async function browseFolder(event: WebUI.Event): Promise<void> {
       }; markScanDirty();`,
     );
     lastScannedRoot = null;
+    lastScannedKeeplistName = null;
     runCleanReady(event, false);
     runStatus(event, "Folder selected", "success");
   } catch (error) {
@@ -561,12 +828,22 @@ async function generateKeeplist(event: WebUI.Event): Promise<void> {
     return;
   }
 
+  const keeplistName = await requireKeeplistName(event);
+  if (!keeplistName) {
+    return;
+  }
+
   try {
     runBusy(event, true);
-    const files = await writeKeeplist(root);
+    const files = await writeKeeplist(root, keeplistName);
     lastScannedRoot = null;
+    lastScannedKeeplistName = null;
     runCleanReady(event, false);
-    runStatus(event, `#keeplist.txt generated (${files.length} entries)`, "success");
+    runStatus(
+      event,
+      `${keeplistName} generated (${files.length} entries)`,
+      "success",
+    );
   } catch (error) {
     runStatus(event, `Failed to generate keeplist: ${String(error)}`, "error");
   } finally {
@@ -581,10 +858,16 @@ async function scanFolder(event: WebUI.Event): Promise<void> {
     return;
   }
 
+  const keeplistName = await requireKeeplistName(event);
+  if (!keeplistName) {
+    return;
+  }
+
   try {
     runBusy(event, true);
-    const plan = await buildScanPlan(root);
+    const plan = await buildScanPlan(root, keeplistName);
     lastScannedRoot = root;
+    lastScannedKeeplistName = keeplistName;
     runCleanReady(event, true);
     runResults(event, plan.removableFiles, plan.plannedRenames);
     runStatus(
@@ -594,6 +877,7 @@ async function scanFolder(event: WebUI.Event): Promise<void> {
     );
   } catch (error) {
     lastScannedRoot = null;
+    lastScannedKeeplistName = null;
     runCleanReady(event, false);
     runStatus(event, `Failed to scan folder: ${String(error)}`, "error");
   } finally {
@@ -608,7 +892,12 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
     return;
   }
 
-  if (lastScannedRoot !== root) {
+  const keeplistName = await requireKeeplistName(event);
+  if (!keeplistName) {
+    return;
+  }
+
+  if (lastScannedRoot !== root || lastScannedKeeplistName !== keeplistName) {
     runCleanReady(event, false);
     runStatus(
       event,
@@ -618,16 +907,20 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
     return;
   }
 
-  const confirmed = await showCleanupConfirmation(event);
+  const confirmed = await showCleanupConfirmation(event, keeplistName);
   if (!confirmed) {
     runStatus(event, "Cleanup cancelled", "info");
     return;
   }
 
+  const mode = await getCleanMode(event);
+
   try {
     runBusy(event, true);
-    const result = await cleanFolderDetailed(root);
-    const appliedRenames = result.renameResults.filter((rename) => rename.applied)
+    const result = await cleanFolderDetailed(root, { mode, keeplistName });
+    const appliedRenames = result.renameResults.filter((rename) =>
+      rename.applied
+    )
       .length;
     const missingSourceRenames = result.renameResults.filter((rename) =>
       rename.reason === "missing_source"
@@ -643,15 +936,23 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
         to: rename.to,
       })),
     );
+    const modeSummary = result.removedFiles.length === 0
+      ? "not removed (no files to clean)"
+      : result.mode === "quarantine"
+      ? (result.quarantineRunId
+        ? `quarantined at ${QUARANTINE_DIR}/${result.quarantineRunId}`
+        : "quarantined")
+      : "deleted permanently";
     runStatus(
       event,
-      `Cleanup complete (${result.removedFiles.length} file(s) removed, renames: ${appliedRenames} applied, ${missingSourceRenames} missing source, ${targetExistsRenames} target exists)`,
+      `Cleanup complete (${result.removedFiles.length} file(s) ${modeSummary}, renames: ${appliedRenames} applied, ${missingSourceRenames} missing source, ${targetExistsRenames} target exists)`,
       "success",
     );
   } catch (error) {
     runStatus(event, `Failed to clean folder: ${String(error)}`, "error");
   } finally {
     lastScannedRoot = null;
+    lastScannedKeeplistName = null;
     runCleanReady(event, false);
     runBusy(event, false);
   }
@@ -668,4 +969,3 @@ win.bind("cleanFiles", cleanFiles);
 
 await win.showBrowser(html, WebUI.Browser.AnyBrowser);
 await WebUI.wait();
-
