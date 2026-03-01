@@ -11,6 +11,7 @@ import {
   normalizeRelativePath,
   QUARANTINE_DIR,
   readKeeplist,
+  resolveKeeplistName,
   scanForRemoval,
   writeKeeplist,
 } from "./logic.ts";
@@ -68,6 +69,54 @@ Deno.test("getRemovableFiles never removes #keeplist.txt", () => {
   assertEquals(removable, ["temp/b.log"]);
 });
 
+Deno.test("resolveKeeplistName uses default and prefixed keeplist names deterministically", () => {
+  assertEquals(resolveKeeplistName(null), "#keeplist.txt");
+  assertEquals(resolveKeeplistName("vanilla"), "#vanilla-keeplist.txt");
+});
+
+Deno.test("getRemovableFiles never removes the active prefixed keeplist", () => {
+  const files = ["#vanilla-keeplist.txt", "mods/a.txt", "temp/b.log"];
+  const removable = getRemovableFiles(
+    files,
+    ["mods/**"],
+    [],
+    "#vanilla-keeplist.txt",
+  );
+
+  assertEquals(removable, ["temp/b.log"]);
+});
+
+Deno.test("getRemovableFiles protects non-active prefixed keeplists in default mode", () => {
+  const files = [
+    "#keeplist.txt",
+    "#vanilla-keeplist.txt",
+    "#modded-keeplist.txt",
+    "mods/a.txt",
+    "temp/b.log",
+  ];
+  const removable = getRemovableFiles(files, ["mods/**"]);
+
+  assertEquals(removable, ["temp/b.log"]);
+});
+
+Deno.test("getRemovableFiles protects sibling keeplists in prefixed mode", () => {
+  const files = [
+    "#keeplist.txt",
+    "#vanilla-keeplist.txt",
+    "#modded-keeplist.txt",
+    "mods/a.txt",
+    "temp/b.log",
+  ];
+  const removable = getRemovableFiles(
+    files,
+    ["mods/**"],
+    [],
+    "#vanilla-keeplist.txt",
+  );
+
+  assertEquals(removable, ["temp/b.log"]);
+});
+
 Deno.test("writeKeeplist, scanForRemoval and cleanFolder workflow", async () => {
   const root = await Deno.makeTempDir();
 
@@ -114,6 +163,35 @@ Deno.test("writeKeeplist prepends generated header verbatim", async () => {
     const text = await Deno.readTextFile(join(root, KEEPLIST_FILE));
     const expected = `${GENERATED_KEEPLIST_HEADER}\n\nmods/keep.txt\n`;
     assertEquals(text, expected);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("writeKeeplist, scanForRemoval and cleanFolder support prefixed keeplist filenames", async () => {
+  const root = await Deno.makeTempDir();
+  const keeplistName = resolveKeeplistName("vanilla");
+
+  try {
+    await Deno.mkdir(join(root, "mods"), { recursive: true });
+    await Deno.mkdir(join(root, "logs"), { recursive: true });
+
+    await Deno.writeTextFile(join(root, "mods", "keep.txt"), "keep");
+    await Deno.writeTextFile(join(root, "logs", "delete.log"), "delete");
+
+    await writeKeeplist(root, keeplistName);
+    await Deno.writeTextFile(join(root, keeplistName), "mods/**\n");
+
+    const candidates = await scanForRemoval(root, keeplistName);
+    assertEquals(candidates, ["logs/delete.log"]);
+
+    const removed = await cleanFolder(root, keeplistName);
+    assertEquals(removed, ["logs/delete.log"]);
+
+    const keeplistExists = await Deno.stat(join(root, keeplistName))
+      .then(() => true)
+      .catch(() => false);
+    assertEquals(keeplistExists, true);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -190,6 +268,22 @@ Deno.test("scanForRemoval fails when keeplist is missing", async () => {
   }
 });
 
+Deno.test("scanForRemoval reports the prefixed keeplist name when it is missing", async () => {
+  const root = await Deno.makeTempDir();
+  const keeplistName = resolveKeeplistName("vanilla");
+
+  try {
+    await Deno.writeTextFile(join(root, "orphan.txt"), "x");
+    await assertRejects(
+      () => scanForRemoval(root, keeplistName),
+      Error,
+      "#vanilla-keeplist.txt not found",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("cleanFolder fails when keeplist is empty", async () => {
   const root = await Deno.makeTempDir();
   try {
@@ -199,6 +293,23 @@ Deno.test("cleanFolder fails when keeplist is empty", async () => {
       () => cleanFolder(root),
       Error,
       "#keeplist.txt is empty",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFolder fails when prefixed keeplist is empty", async () => {
+  const root = await Deno.makeTempDir();
+  const keeplistName = resolveKeeplistName("vanilla");
+
+  try {
+    await Deno.writeTextFile(join(root, "orphan.txt"), "x");
+    await Deno.writeTextFile(join(root, keeplistName), "\n");
+    await assertRejects(
+      () => cleanFolder(root, keeplistName),
+      Error,
+      "#vanilla-keeplist.txt is empty",
     );
   } finally {
     await Deno.remove(root, { recursive: true });
@@ -506,20 +617,37 @@ Deno.test("listRelativeFiles and buildScanPlan exclude quarantine directory", as
 
   try {
     await Deno.mkdir(join(root, "keep"), { recursive: true });
-    await Deno.mkdir(join(root, QUARANTINE_DIR, "2026-01-01T00-00-00.000Z", "trash"), { recursive: true });
+    await Deno.mkdir(
+      join(root, QUARANTINE_DIR, "2026-01-01T00-00-00.000Z", "trash"),
+      { recursive: true },
+    );
 
     await Deno.writeTextFile(join(root, "keep", "stay.txt"), "keep");
     await Deno.writeTextFile(
-      join(root, QUARANTINE_DIR, "2026-01-01T00-00-00.000Z", "trash", "old.tmp"),
+      join(
+        root,
+        QUARANTINE_DIR,
+        "2026-01-01T00-00-00.000Z",
+        "trash",
+        "old.tmp",
+      ),
       "old",
     );
     await Deno.writeTextFile(join(root, KEEPLIST_FILE), "keep/**\n");
 
     const files = await listRelativeFiles(root);
-    assertEquals(files.includes(`${QUARANTINE_DIR}/2026-01-01T00-00-00.000Z/trash/old.tmp`), false);
+    assertEquals(
+      files.includes(
+        `${QUARANTINE_DIR}/2026-01-01T00-00-00.000Z/trash/old.tmp`,
+      ),
+      false,
+    );
 
     const plan = await buildScanPlan(root);
-    assertEquals(plan.removableFiles.some((f) => f.startsWith(QUARANTINE_DIR)), false);
+    assertEquals(
+      plan.removableFiles.some((f) => f.startsWith(QUARANTINE_DIR)),
+      false,
+    );
   } finally {
     await Deno.remove(root, { recursive: true });
   }

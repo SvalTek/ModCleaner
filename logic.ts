@@ -57,12 +57,21 @@ export type CleanMode = "delete" | "quarantine";
 
 export type CleanFolderDetailedOptions = {
   mode?: CleanMode;
+  keeplistName?: string;
 };
 
 type KeeplistConfig = {
   keepRules: string[];
   renameDirectives: RenameDirective[];
 };
+
+export function resolveKeeplistName(prefix: string | null): string {
+  if (!prefix) {
+    return KEEPLIST_FILE;
+  }
+
+  return `#${prefix}-keeplist.txt`;
+}
 
 export async function walkFiles(root: string): Promise<string[]> {
   const files: string[] = [];
@@ -76,7 +85,9 @@ export async function walkFiles(root: string): Promise<string[]> {
       }
       if (entry.isDirectory) {
         const relPath = relative(root, fullPath).replaceAll("\\", "/");
-        if (relPath === QUARANTINE_DIR || relPath.startsWith(`${QUARANTINE_DIR}/`)) {
+        if (
+          relPath === QUARANTINE_DIR || relPath.startsWith(`${QUARANTINE_DIR}/`)
+        ) {
           continue;
         }
         await walk(fullPath);
@@ -99,10 +110,13 @@ export async function listRelativeFiles(root: string): Promise<string[]> {
     .sort((a, b) => a.localeCompare(b));
 }
 
-export async function writeKeeplist(root: string): Promise<string[]> {
+export async function writeKeeplist(
+  root: string,
+  keeplistName = KEEPLIST_FILE,
+): Promise<string[]> {
   const files = await listRelativeFiles(root);
   const lines = [GENERATED_KEEPLIST_HEADER, "", ...files];
-  await Deno.writeTextFile(join(root, KEEPLIST_FILE), `${lines.join("\n")}\n`);
+  await Deno.writeTextFile(join(root, keeplistName), `${lines.join("\n")}\n`);
   return files;
 }
 
@@ -227,29 +241,38 @@ function parseKeeplist(text: string): KeeplistConfig {
   return { keepRules, renameDirectives };
 }
 
-async function readKeeplistConfig(root: string): Promise<KeeplistConfig> {
-  const text = await Deno.readTextFile(join(root, KEEPLIST_FILE));
+async function readKeeplistConfig(
+  root: string,
+  keeplistName: string,
+): Promise<KeeplistConfig> {
+  const text = await Deno.readTextFile(join(root, keeplistName));
   return parseKeeplist(text);
 }
 
-export async function readKeeplist(root: string): Promise<string[]> {
-  const config = await readKeeplistConfig(root);
+export async function readKeeplist(
+  root: string,
+  keeplistName = KEEPLIST_FILE,
+): Promise<string[]> {
+  const config = await readKeeplistConfig(root, keeplistName);
   return config.keepRules;
 }
 
-async function readValidatedKeeplist(root: string): Promise<KeeplistConfig> {
+async function readValidatedKeeplist(
+  root: string,
+  keeplistName: string,
+): Promise<KeeplistConfig> {
   let config: KeeplistConfig;
   try {
-    config = await readKeeplistConfig(root);
+    config = await readKeeplistConfig(root, keeplistName);
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) {
-      throw new Error(`${KEEPLIST_FILE} not found. Generate keeplist first.`);
+      throw new Error(`${keeplistName} not found. Generate keeplist first.`);
     }
     throw error;
   }
 
   if (config.keepRules.length === 0) {
-    throw new Error(`${KEEPLIST_FILE} is empty. Add at least one keep rule.`);
+    throw new Error(`${keeplistName} is empty. Add at least one keep rule.`);
   }
 
   return config;
@@ -371,10 +394,21 @@ function isKeptWithMatchers(path: string, matchers: RegExp[]): boolean {
   return matchers.some((matcher) => matcher.test(normalizedPath));
 }
 
+function isProtectedKeeplistPath(path: string): boolean {
+  const normalizedPath = path.replaceAll("\\", "/");
+  if (normalizedPath.includes("/")) {
+    return false;
+  }
+
+  return normalizedPath === KEEPLIST_FILE ||
+    /^#[A-Za-z0-9_-]+-keeplist\.txt$/.test(normalizedPath);
+}
+
 export function getRemovableFiles(
   files: string[],
   rules: string[],
   protectedPaths: Iterable<string> = [],
+  keeplistName = KEEPLIST_FILE,
 ): string[] {
   const matchers = compileKeepRules(rules);
   const protectedSet = new Set(
@@ -382,7 +416,7 @@ export function getRemovableFiles(
   );
 
   return files.filter((file) => {
-    if (file === KEEPLIST_FILE) {
+    if (file === keeplistName || isProtectedKeeplistPath(file)) {
       return false;
     }
     if (protectedSet.has(file.replaceAll("\\", "/"))) {
@@ -396,22 +430,29 @@ function protectedPathsFromRenames(renames: RenameDirective[]): string[] {
   return renames.flatMap((rename) => [rename.from, rename.to]);
 }
 
-export async function buildScanPlan(root: string): Promise<ScanPlan> {
+export async function buildScanPlan(
+  root: string,
+  keeplistName = KEEPLIST_FILE,
+): Promise<ScanPlan> {
   const files = await listRelativeFiles(root);
-  const config = await readValidatedKeeplist(root);
+  const config = await readValidatedKeeplist(root, keeplistName);
 
   return {
     removableFiles: getRemovableFiles(
       files,
       config.keepRules,
       protectedPathsFromRenames(config.renameDirectives),
+      keeplistName,
     ),
     plannedRenames: config.renameDirectives,
   };
 }
 
-export async function scanForRemoval(root: string): Promise<string[]> {
-  const plan = await buildScanPlan(root);
+export async function scanForRemoval(
+  root: string,
+  keeplistName = KEEPLIST_FILE,
+): Promise<string[]> {
+  const plan = await buildScanPlan(root, keeplistName);
   return plan.removableFiles;
 }
 
@@ -491,7 +532,7 @@ export async function cleanFolderDetailed(
   root: string,
   options: CleanFolderDetailedOptions = {},
 ): Promise<CleanResult> {
-  const plan = await buildScanPlan(root);
+  const plan = await buildScanPlan(root, options.keeplistName ?? KEEPLIST_FILE);
   const mode = options.mode ?? "delete";
 
   if (mode !== "delete" && mode !== "quarantine") {
@@ -520,7 +561,10 @@ export async function cleanFolderDetailed(
   };
 }
 
-export async function cleanFolder(root: string): Promise<string[]> {
-  const result = await cleanFolderDetailed(root);
+export async function cleanFolder(
+  root: string,
+  keeplistName = KEEPLIST_FILE,
+): Promise<string[]> {
+  const result = await cleanFolderDetailed(root, { keeplistName });
   return result.removedFiles;
 }
