@@ -236,7 +236,7 @@ function parseKeeplist(text: string): KeeplistConfig {
       continue;
     }
 
-    if (line.startsWith("!rename")) {
+    if (/^!rename(\s|$)/.test(line)) {
       const directive = parseRenameDirective(line, lineNumber);
 
       if (seenFrom.has(directive.from)) {

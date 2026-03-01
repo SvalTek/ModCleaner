@@ -1139,6 +1139,47 @@ Deno.test("scanForRemoval rejects malformed !rename without arrow", async () => 
   }
 });
 
+Deno.test("scanForRemoval treats !rename-prefixed literals as keep rules", async () => {
+  const root = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      join(root, KEEPLIST_FILE),
+      ["mods/**", "!rename_backup.dll"].join("\n"),
+    );
+
+    await Deno.mkdir(join(root, "mods"), { recursive: true });
+    await Deno.writeTextFile(join(root, "mods", "keep.txt"), "keep");
+    await Deno.mkdir(join(root, "trash"), { recursive: true });
+    await Deno.writeTextFile(join(root, "trash", "remove.txt"), "remove");
+
+    const removable = await scanForRemoval(root);
+    assertEquals(removable, ["trash/remove.txt"]);
+
+    const keepRules = await readKeeplist(root);
+    assertEquals(keepRules, ["mods/**", "!rename_backup.dll"]);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("scanForRemoval still rejects malformed true !rename directives", async () => {
+  const root = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      join(root, KEEPLIST_FILE),
+      ["mods/**", "!rename from.txt to.txt"].join("\n"),
+    );
+
+    await assertRejects(
+      () => scanForRemoval(root),
+      Error,
+      "expected '!rename <from> -> <to>'",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("scanForRemoval rejects !rename with missing from path", async () => {
   const root = await Deno.makeTempDir();
   try {
