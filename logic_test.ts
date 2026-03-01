@@ -197,6 +197,26 @@ Deno.test("writeKeeplist, scanForRemoval and cleanFolder support prefixed keepli
   }
 });
 
+Deno.test("writeKeeplist rejects invalid keeplist names before filesystem writes", async () => {
+  const root = await Deno.makeTempDir();
+  const escapedPath = join(root, "..", "escaped-keeplist.txt");
+
+  try {
+    await assertRejects(
+      () => writeKeeplist(root, "../escaped-keeplist.txt"),
+      Error,
+      "Invalid keeplist name: ../escaped-keeplist.txt.",
+    );
+
+    const escapedExists = await Deno.stat(escapedPath)
+      .then(() => true)
+      .catch(() => false);
+    assertEquals(escapedExists, false);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("listRelativeFiles returns deterministic lexicographic ordering", async () => {
   const root = await Deno.makeTempDir();
 
@@ -284,6 +304,34 @@ Deno.test("scanForRemoval reports the prefixed keeplist name when it is missing"
   }
 });
 
+Deno.test("readKeeplist rejects invalid keeplist names", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await assertRejects(
+      () => readKeeplist(root, "#../keeplist.txt"),
+      Error,
+      "Invalid keeplist name: #../keeplist.txt.",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("scanForRemoval rejects invalid keeplist names", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await assertRejects(
+      () => scanForRemoval(root, "#/bad-keeplist.txt"),
+      Error,
+      "Invalid keeplist name: #/bad-keeplist.txt.",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("cleanFolder fails when keeplist is empty", async () => {
   const root = await Deno.makeTempDir();
   try {
@@ -293,6 +341,20 @@ Deno.test("cleanFolder fails when keeplist is empty", async () => {
       () => cleanFolder(root),
       Error,
       "#keeplist.txt is empty",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFolder rejects invalid keeplist names", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await assertRejects(
+      () => cleanFolder(root, "C:/outside/#keeplist.txt"),
+      Error,
+      "Invalid keeplist name: C:/outside/#keeplist.txt.",
     );
   } finally {
     await Deno.remove(root, { recursive: true });

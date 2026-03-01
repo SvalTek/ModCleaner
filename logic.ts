@@ -65,6 +65,18 @@ type KeeplistConfig = {
   renameDirectives: RenameDirective[];
 };
 
+function validateKeeplistName(keeplistName: string): void {
+  keeplistName = keeplistName.trim();
+  if (
+    keeplistName !== KEEPLIST_FILE &&
+    !/^#[A-Za-z0-9_-]+-keeplist\.txt$/.test(keeplistName)
+  ) {
+    throw new Error(
+      `Invalid keeplist name: ${keeplistName}. Expected #keeplist.txt or #<prefix>-keeplist.txt.`,
+    );
+  }
+}
+
 export function resolveKeeplistName(prefix: string | null): string {
   if (!prefix) {
     return KEEPLIST_FILE;
@@ -114,6 +126,7 @@ export async function writeKeeplist(
   root: string,
   keeplistName = KEEPLIST_FILE,
 ): Promise<string[]> {
+  validateKeeplistName(keeplistName);
   const files = await listRelativeFiles(root);
   const lines = [GENERATED_KEEPLIST_HEADER, "", ...files];
   await Deno.writeTextFile(join(root, keeplistName), `${lines.join("\n")}\n`);
@@ -245,6 +258,7 @@ async function readKeeplistConfig(
   root: string,
   keeplistName: string,
 ): Promise<KeeplistConfig> {
+  validateKeeplistName(keeplistName);
   const text = await Deno.readTextFile(join(root, keeplistName));
   return parseKeeplist(text);
 }
@@ -434,6 +448,7 @@ export async function buildScanPlan(
   root: string,
   keeplistName = KEEPLIST_FILE,
 ): Promise<ScanPlan> {
+  validateKeeplistName(keeplistName);
   const files = await listRelativeFiles(root);
   const config = await readValidatedKeeplist(root, keeplistName);
 
