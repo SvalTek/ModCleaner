@@ -62,6 +62,7 @@ export type CleanFolderDetailedOptions = {
 
 export type CleanFromPlanOptions = {
   mode?: CleanMode;
+  keeplistName?: string;
 };
 
 type KeeplistConfig = {
@@ -544,22 +545,31 @@ function buildQuarantineRunId(): string {
 async function quarantineFiles(
   root: string,
   removableFiles: string[],
-): Promise<string | undefined> {
+): Promise<{ runId?: string; movedFiles: string[] }> {
   if (removableFiles.length === 0) {
-    return undefined;
+    return { runId: undefined, movedFiles: [] };
   }
 
   const runId = buildQuarantineRunId();
   const quarantineRoot = join(root, QUARANTINE_DIR, runId);
+  const movedFiles: string[] = [];
 
   for (const file of removableFiles) {
     const sourcePath = join(root, file);
     const targetPath = join(quarantineRoot, file);
     await Deno.mkdir(dirname(targetPath), { recursive: true });
-    await Deno.rename(sourcePath, targetPath);
+    try {
+      await Deno.rename(sourcePath, targetPath);
+      movedFiles.push(file);
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) {
+        continue;
+      }
+      throw error;
+    }
   }
 
-  return runId;
+  return { runId: movedFiles.length === 0 ? undefined : runId, movedFiles };
 }
 
 function validatePlanRelativePath(path: string, kind: string): string {
@@ -649,7 +659,10 @@ export async function cleanFolderDetailed(
   options: CleanFolderDetailedOptions = {},
 ): Promise<CleanResult> {
   const plan = await buildScanPlan(root, options.keeplistName ?? KEEPLIST_FILE);
-  return cleanFromPlan(root, plan, { mode: options.mode });
+  return cleanFromPlan(root, plan, {
+    mode: options.mode,
+    keeplistName: options.keeplistName,
+  });
 }
 
 export async function cleanFromPlan(
@@ -658,29 +671,45 @@ export async function cleanFromPlan(
   options: CleanFromPlanOptions = {},
 ): Promise<CleanResult> {
   const mode = options.mode ?? "delete";
+  const keeplistName = options.keeplistName ?? KEEPLIST_FILE;
 
   if (mode !== "delete" && mode !== "quarantine") {
     throw new Error(`Invalid clean mode: ${mode}`);
   }
 
   const validatedPlan = validateScanPlanInput(plan);
+  await readValidatedKeeplist(root, keeplistName);
 
   let quarantineRunId: string | undefined;
+  const removedFiles: string[] = [];
 
   if (mode === "delete") {
     for (const file of validatedPlan.removableFiles) {
-      await Deno.remove(join(root, file));
+      try {
+        await Deno.remove(join(root, file));
+        removedFiles.push(file);
+      } catch (error) {
+        if (error instanceof Deno.errors.NotFound) {
+          continue;
+        }
+        throw error;
+      }
     }
   } else {
-    quarantineRunId = await quarantineFiles(root, validatedPlan.removableFiles);
+    const quarantineResult = await quarantineFiles(
+      root,
+      validatedPlan.removableFiles,
+    );
+    quarantineRunId = quarantineResult.runId;
+    removedFiles.push(...quarantineResult.movedFiles);
   }
 
   const renameResults = await applyRenames(root, validatedPlan.plannedRenames);
 
-  await pruneEmptyParentDirs(root, validatedPlan.removableFiles);
+  await pruneEmptyParentDirs(root, removedFiles);
 
   return {
-    removedFiles: validatedPlan.removableFiles,
+    removedFiles,
     renameResults,
     mode,
     quarantineRunId,

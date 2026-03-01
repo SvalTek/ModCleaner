@@ -1,7 +1,6 @@
 import { WebUI } from "WebUI";
 import { FileDialog, load as loadNativeDialog } from "@miyauci/rfd/deno";
 import {
-  assertKeeplistReady,
   buildScanPlan,
   cleanFromPlan,
   type CleanMode,
@@ -925,15 +924,6 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
     return;
   }
 
-  try {
-    await assertKeeplistReady(root, keeplistName);
-  } catch (error) {
-    resetCachedScanState();
-    runCleanReady(event, false);
-    runStatus(event, `Failed to clean folder: ${String(error)}`, "error");
-    return;
-  }
-
   const confirmed = await showCleanupConfirmation(event, keeplistName);
   if (!confirmed) {
     runStatus(event, "Cleanup cancelled", "info");
@@ -942,7 +932,10 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
 
   try {
     runBusy(event, true);
-    const result = await cleanFromPlan(root, lastScanPlan, { mode });
+    const result = await cleanFromPlan(root, lastScanPlan, {
+      mode,
+      keeplistName,
+    });
     const appliedRenames = result.renameResults.filter((rename) =>
       rename.applied
     )
