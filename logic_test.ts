@@ -353,6 +353,8 @@ Deno.test("cleanFolder applies !rename after deletion and reports rename results
     );
 
     const result = await cleanFolderDetailed(root);
+    assertEquals(result.mode, "delete");
+    assertEquals(result.quarantineRunId, undefined);
     assertEquals(result.removedFiles, [
       "Game/Binaries/Win64/modloader-temp.dll",
     ]);
@@ -387,6 +389,95 @@ Deno.test("cleanFolder applies !rename after deletion and reports rename results
   }
 });
 
+Deno.test("cleanFolderDetailed quarantine mode moves files into deterministic run layout without data loss", async () => {
+  const root = await Deno.makeTempDir();
+
+  const toIsoStub = stub(
+    Date.prototype,
+    "toISOString",
+    () => "2026-01-02T03:04:05.678Z",
+  );
+
+  try {
+    await Deno.mkdir(join(root, "keep"), { recursive: true });
+    await Deno.mkdir(join(root, "trash", "nested"), { recursive: true });
+
+    await Deno.writeTextFile(join(root, "keep", "stay.txt"), "keep");
+    await Deno.writeTextFile(
+      join(root, "trash", "nested", "remove.tmp"),
+      "remove-content",
+    );
+
+    await Deno.writeTextFile(join(root, KEEPLIST_FILE), "keep/**\n");
+
+    const result = await cleanFolderDetailed(root, { mode: "quarantine" });
+    assertEquals(result.mode, "quarantine");
+    assertEquals(result.quarantineRunId, "2026-01-02T03-04-05.678Z");
+    assertEquals(result.removedFiles, ["trash/nested/remove.tmp"]);
+
+    const sourceExists = await Deno.stat(
+      join(root, "trash", "nested", "remove.tmp"),
+    )
+      .then(() => true)
+      .catch(() => false);
+    assertEquals(sourceExists, false);
+
+    const quarantinedPath = join(
+      root,
+      ".modcleaner_quarantine",
+      "2026-01-02T03-04-05.678Z",
+      "trash",
+      "nested",
+      "remove.tmp",
+    );
+    const quarantinedContent = await Deno.readTextFile(quarantinedPath);
+    assertEquals(quarantinedContent, "remove-content");
+  } finally {
+    toIsoStub.restore();
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFolderDetailed quarantine mode still applies renames after removal phase", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.mkdir(join(root, "keep"), { recursive: true });
+    await Deno.mkdir(join(root, "trash"), { recursive: true });
+    await Deno.mkdir(join(root, "restore"), { recursive: true });
+
+    await Deno.writeTextFile(join(root, "keep", "stay.txt"), "keep");
+    await Deno.writeTextFile(join(root, "trash", "remove.tmp"), "remove");
+    await Deno.writeTextFile(join(root, "restore", "backup.bin"), "backup");
+
+    await Deno.writeTextFile(
+      join(root, KEEPLIST_FILE),
+      [
+        "keep/**",
+        "!rename restore/backup.bin -> restore/live.bin",
+      ].join("\n"),
+    );
+
+    const result = await cleanFolderDetailed(root, { mode: "quarantine" });
+    assertEquals(result.renameResults, [
+      {
+        from: "restore/backup.bin",
+        to: "restore/live.bin",
+        applied: true,
+      },
+    ]);
+
+    const renamedTargetExists = await Deno.stat(
+      join(root, "restore", "live.bin"),
+    )
+      .then(() => true)
+      .catch(() => false);
+    assertEquals(renamedTargetExists, true);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("cleanFolderDetailed prunes empty parent directories of removed files", async () => {
   const root = await Deno.makeTempDir();
 
@@ -395,7 +486,10 @@ Deno.test("cleanFolderDetailed prunes empty parent directories of removed files"
     await Deno.mkdir(join(root, "trash", "nested"), { recursive: true });
 
     await Deno.writeTextFile(join(root, "keep", "stay.txt"), "keep");
-    await Deno.writeTextFile(join(root, "trash", "nested", "remove.tmp"), "remove");
+    await Deno.writeTextFile(
+      join(root, "trash", "nested", "remove.tmp"),
+      "remove",
+    );
 
     await Deno.writeTextFile(join(root, KEEPLIST_FILE), "keep/**\n");
 
@@ -699,7 +793,9 @@ Deno.test("cleanFolderDetailed treats missing rename target parent as fatal", as
 
     await assertRejects(() => cleanFolderDetailed(root), Error);
 
-    const removedStillMissing = await Deno.stat(join(root, "misc", "remove.tmp"))
+    const removedStillMissing = await Deno.stat(
+      join(root, "misc", "remove.tmp"),
+    )
       .then(() => false)
       .catch(() => true);
     const sourceStillExists = await Deno.stat(join(root, "backup.bin"))
@@ -734,7 +830,9 @@ Deno.test("cleanFolderDetailed propagates fatal rename errors without rollback",
 
     await assertRejects(() => cleanFolderDetailed(root), Error);
 
-    const removedStillMissing = await Deno.stat(join(root, "misc", "remove.tmp"))
+    const removedStillMissing = await Deno.stat(
+      join(root, "misc", "remove.tmp"),
+    )
       .then(() => false)
       .catch(() => true);
     const sourceStillExists = await Deno.stat(join(root, "backup.bin"))
@@ -773,7 +871,11 @@ Deno.test("cleanFolderDetailed propagates fatal target stat errors", async () =>
     });
 
     try {
-      await assertRejects(() => cleanFolderDetailed(root), Error, "synthetic stat failure");
+      await assertRejects(
+        () => cleanFolderDetailed(root),
+        Error,
+        "synthetic stat failure",
+      );
     } finally {
       statStub.restore();
     }

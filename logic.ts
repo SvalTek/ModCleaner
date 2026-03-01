@@ -48,6 +48,14 @@ export type RenameExecutionResult = {
 export type CleanResult = {
   removedFiles: string[];
   renameResults: RenameExecutionResult[];
+  mode: CleanMode;
+  quarantineRunId?: string;
+};
+
+export type CleanMode = "delete" | "quarantine";
+
+export type CleanFolderDetailedOptions = {
+  mode?: CleanMode;
 };
 
 type KeeplistConfig = {
@@ -319,7 +327,6 @@ async function pruneEmptyParentDirs(
   }
 }
 
-
 function compileRule(rule: string): RegExp | null {
   const normalizedRule = normalizeRule(rule);
   if (!normalizedRule) {
@@ -432,7 +439,11 @@ async function applyRenames(
           await Deno.stat(sourcePath);
         } catch (sourceError) {
           if (sourceError instanceof Deno.errors.NotFound) {
-            results.push({ ...rename, applied: false, reason: "missing_source" });
+            results.push({
+              ...rename,
+              applied: false,
+              reason: "missing_source",
+            });
             continue;
           }
 
@@ -446,11 +457,46 @@ async function applyRenames(
   return results;
 }
 
-export async function cleanFolderDetailed(root: string): Promise<CleanResult> {
-  const plan = await buildScanPlan(root);
+function buildQuarantineRunId(): string {
+  return new Date().toISOString().replaceAll(":", "-");
+}
 
-  for (const file of plan.removableFiles) {
-    await Deno.remove(join(root, file));
+async function quarantineFiles(
+  root: string,
+  removableFiles: string[],
+): Promise<string> {
+  const runId = buildQuarantineRunId();
+  const quarantineRoot = join(root, ".modcleaner_quarantine", runId);
+
+  for (const file of removableFiles) {
+    const sourcePath = join(root, file);
+    const targetPath = join(quarantineRoot, file);
+    await Deno.mkdir(dirname(targetPath), { recursive: true });
+    await Deno.rename(sourcePath, targetPath);
+  }
+
+  return runId;
+}
+
+export async function cleanFolderDetailed(
+  root: string,
+  options: CleanFolderDetailedOptions = {},
+): Promise<CleanResult> {
+  const plan = await buildScanPlan(root);
+  const mode = options.mode ?? "delete";
+
+  if (mode !== "delete" && mode !== "quarantine") {
+    throw new Error(`Invalid clean mode: ${mode}`);
+  }
+
+  let quarantineRunId: string | undefined;
+
+  if (mode === "delete") {
+    for (const file of plan.removableFiles) {
+      await Deno.remove(join(root, file));
+    }
+  } else {
+    quarantineRunId = await quarantineFiles(root, plan.removableFiles);
   }
 
   const renameResults = await applyRenames(root, plan.plannedRenames);
@@ -460,6 +506,8 @@ export async function cleanFolderDetailed(root: string): Promise<CleanResult> {
   return {
     removedFiles: plan.removableFiles,
     renameResults,
+    mode,
+    quarantineRunId,
   };
 }
 
