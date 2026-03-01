@@ -490,14 +490,13 @@ function applyPrefixValue(rawValue) {
     return true;
   }
 
-  const normalized = trimmed.toLowerCase();
-  if (!/^[a-z0-9_-]+$/.test(normalized)) {
+  if (!/^[A-Za-z0-9_-]+$/.test(trimmed)) {
     setPrefixValidationError("Prefix must use only letters, numbers, underscores, or hyphens.");
     updateActiveKeeplistName();
     return false;
   }
 
-  keeplistPrefix = normalized;
+  keeplistPrefix = trimmed;
   setPrefixValidationError("");
   updateActiveKeeplistName();
   return true;
