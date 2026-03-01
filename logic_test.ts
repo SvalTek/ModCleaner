@@ -1,4 +1,5 @@
 import {
+  assertKeeplistReady,
   buildScanPlan,
   cleanFolder,
   cleanFolderDetailed,
@@ -552,14 +553,102 @@ Deno.test("cleanFromPlan validates clean mode values", async () => {
   const root = await Deno.makeTempDir();
 
   try {
+    const invalidOptions = { mode: "archive" } as unknown as {
+      mode?: "delete" | "quarantine";
+    };
+
     await assertRejects(
-      // deno-lint-ignore no-explicit-any
       () =>
-        cleanFromPlan(root, { removableFiles: [], plannedRenames: [] }, {
-          mode: "archive" as any,
-        }),
+        cleanFromPlan(
+          root,
+          { removableFiles: [], plannedRenames: [] },
+          invalidOptions,
+        ),
       Error,
       "Invalid clean mode: archive",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("assertKeeplistReady fails with explicit error when keeplist is missing", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await assertRejects(
+      () => assertKeeplistReady(root),
+      Error,
+      "#keeplist.txt not found",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("assertKeeplistReady fails with explicit error when keeplist has no keep rules", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.writeTextFile(join(root, KEEPLIST_FILE), "\n");
+    await assertRejects(
+      () => assertKeeplistReady(root),
+      Error,
+      "#keeplist.txt is empty",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan rejects traversal paths in removable files", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await assertRejects(
+      () =>
+        cleanFromPlan(root, {
+          removableFiles: ["../outside.txt"],
+          plannedRenames: [],
+        }),
+      Error,
+      "Invalid scan plan",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan rejects protected keeplist targets in removable files", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await assertRejects(
+      () =>
+        cleanFromPlan(root, {
+          removableFiles: ["#keeplist.txt"],
+          plannedRenames: [],
+        }),
+      Error,
+      "is protected",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan rejects invalid rename paths in scan plan", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await assertRejects(
+      () =>
+        cleanFromPlan(root, {
+          removableFiles: [],
+          plannedRenames: [{ from: "keep/file.txt", to: "../escape.txt" }],
+        }),
+      Error,
+      "Invalid scan plan",
     );
   } finally {
     await Deno.remove(root, { recursive: true });

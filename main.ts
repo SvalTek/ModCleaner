@@ -1,6 +1,7 @@
 import { WebUI } from "WebUI";
 import { FileDialog, load as loadNativeDialog } from "@miyauci/rfd/deno";
 import {
+  assertKeeplistReady,
   buildScanPlan,
   cleanFromPlan,
   type CleanMode,
@@ -921,6 +922,15 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
       "Run Scan first for the current folder, keeplist, and clean mode, then review the results before cleaning.",
       "error",
     );
+    return;
+  }
+
+  try {
+    await assertKeeplistReady(root, keeplistName);
+  } catch (error) {
+    resetCachedScanState();
+    runCleanReady(event, false);
+    runStatus(event, `Failed to clean folder: ${String(error)}`, "error");
     return;
   }
 

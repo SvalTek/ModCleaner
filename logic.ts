@@ -304,6 +304,13 @@ async function readValidatedKeeplist(
   return config;
 }
 
+export async function assertKeeplistReady(
+  root: string,
+  keeplistName = KEEPLIST_FILE,
+): Promise<void> {
+  await readValidatedKeeplist(root, keeplistName);
+}
+
 function normalizeRule(rule: string): string {
   let normalized = rule.trim().replaceAll("\\", "/");
 
@@ -555,6 +562,88 @@ async function quarantineFiles(
   return runId;
 }
 
+function validatePlanRelativePath(path: string, kind: string): string {
+  const normalizedPath = normalizeLiteralPath(path);
+
+  if (!normalizedPath) {
+    throw new Error(`Invalid scan plan: ${kind} path is empty.`);
+  }
+
+  if (isAbsolute(normalizedPath) || /^[A-Za-z]:\//.test(normalizedPath)) {
+    throw new Error(
+      `Invalid scan plan: ${kind} path '${normalizedPath}' must be relative.`,
+    );
+  }
+
+  if (
+    normalizedPath.includes("*") || normalizedPath.includes("?") ||
+    normalizedPath.includes("[") || normalizedPath.includes("]")
+  ) {
+    throw new Error(
+      `Invalid scan plan: wildcards are not allowed in ${kind} path '${normalizedPath}'.`,
+    );
+  }
+
+  const segments = normalizedPath.split("/");
+  if (
+    segments.some((segment) =>
+      segment.length === 0 || segment === "." || segment === ".."
+    )
+  ) {
+    throw new Error(
+      `Invalid scan plan: ${kind} path '${normalizedPath}' must be a clean relative path.`,
+    );
+  }
+
+  return normalizedPath;
+}
+
+function validateScanPlanInput(plan: ScanPlan): ScanPlan {
+  const removableFiles: string[] = [];
+  const plannedRenames: RenameDirective[] = [];
+  const seenFrom = new Set<string>();
+  const seenTo = new Set<string>();
+
+  for (const file of plan.removableFiles) {
+    const normalizedFile = validatePlanRelativePath(file, "removable file");
+    if (isProtectedKeeplistPath(normalizedFile)) {
+      throw new Error(
+        `Invalid scan plan: removable file '${normalizedFile}' is protected.`,
+      );
+    }
+    removableFiles.push(normalizedFile);
+  }
+
+  for (const rename of plan.plannedRenames) {
+    const from = validatePlanRelativePath(rename.from, "rename from");
+    const to = validatePlanRelativePath(rename.to, "rename to");
+
+    if (from === to) {
+      throw new Error(
+        `Invalid scan plan: rename source and target are identical ('${from}').`,
+      );
+    }
+
+    if (seenFrom.has(from)) {
+      throw new Error(
+        `Invalid scan plan: duplicate rename source path '${from}'.`,
+      );
+    }
+
+    if (seenTo.has(to)) {
+      throw new Error(
+        `Invalid scan plan: duplicate rename target path '${to}'.`,
+      );
+    }
+
+    seenFrom.add(from);
+    seenTo.add(to);
+    plannedRenames.push({ from, to });
+  }
+
+  return { removableFiles, plannedRenames };
+}
+
 export async function cleanFolderDetailed(
   root: string,
   options: CleanFolderDetailedOptions = {},
@@ -574,22 +663,24 @@ export async function cleanFromPlan(
     throw new Error(`Invalid clean mode: ${mode}`);
   }
 
+  const validatedPlan = validateScanPlanInput(plan);
+
   let quarantineRunId: string | undefined;
 
   if (mode === "delete") {
-    for (const file of plan.removableFiles) {
+    for (const file of validatedPlan.removableFiles) {
       await Deno.remove(join(root, file));
     }
   } else {
-    quarantineRunId = await quarantineFiles(root, plan.removableFiles);
+    quarantineRunId = await quarantineFiles(root, validatedPlan.removableFiles);
   }
 
-  const renameResults = await applyRenames(root, plan.plannedRenames);
+  const renameResults = await applyRenames(root, validatedPlan.plannedRenames);
 
-  await pruneEmptyParentDirs(root, plan.removableFiles);
+  await pruneEmptyParentDirs(root, validatedPlan.removableFiles);
 
   return {
-    removedFiles: plan.removableFiles,
+    removedFiles: validatedPlan.removableFiles,
     renameResults,
     mode,
     quarantineRunId,
