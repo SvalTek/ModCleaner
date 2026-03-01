@@ -4,6 +4,7 @@ import {
   buildScanPlan,
   cleanFolderDetailed,
   type CleanMode,
+  QUARANTINE_DIR,
   writeKeeplist,
 } from "./logic.ts";
 
@@ -372,7 +373,7 @@ button.danger:hover:not(:disabled) {
         <hr />
         <div><code>Scan</code> checks the folder against <code>#keeplist.txt</code> and lists files that would be removed.</div>
         <div><code>Scan</code> and <code>Clean</code> require <code>#keeplist.txt</code> to exist and contain at least one rule.</div>
-        <div><code>Clean</code> can permanently delete files or move them into <code>.modcleaner_quarantine/&lt;timestamp&gt;</code>.</div>
+        <div><code>Clean</code> can permanently delete files or move them into <code>${QUARANTINE_DIR}/&lt;timestamp&gt;</code>.</div>
       </div>
     </details>
   </section>
@@ -433,7 +434,7 @@ function updateCleanModeHelp() {
     return;
   }
 
-  help.innerText = "Quarantine mode moves removable files to .modcleaner_quarantine/<timestamp>/ under the selected game folder.";
+  help.innerText = "Quarantine mode moves removable files to ${QUARANTINE_DIR}/<timestamp>/ under the selected game folder.";
 }
 function setCleanReady(isReady) {
   cleanReady = Boolean(isReady);
@@ -556,7 +557,7 @@ async function showCleanupConfirmation(event: WebUI.Event): Promise<boolean> {
   const mode = await getCleanMode(event);
   const message = mode === "delete"
     ? "Delete mode permanently removes files that are not covered by #keeplist.txt. Continue?"
-    : "Quarantine mode moves removable files to .modcleaner_quarantine/<timestamp>/ inside the selected game folder. Continue?";
+    : `Quarantine mode moves removable files to ${QUARANTINE_DIR}/<timestamp>/ inside the selected game folder. Continue?`;
 
   const confirmedValue: unknown = await event.window.script(`
     return showConfirmDialog(
@@ -729,7 +730,7 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
       })),
     );
     const modeSummary = result.mode === "quarantine" && result.quarantineRunId
-      ? `quarantined at .modcleaner_quarantine/${result.quarantineRunId}`
+      ? `quarantined at ${QUARANTINE_DIR}/${result.quarantineRunId}`
       : "deleted permanently";
     runStatus(
       event,

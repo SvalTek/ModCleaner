@@ -425,7 +425,7 @@ Deno.test("cleanFolderDetailed quarantine mode moves files into deterministic ru
 
     const quarantinedPath = join(
       root,
-      ".modcleaner_quarantine",
+      QUARANTINE_DIR,
       "2026-01-02T03-04-05.678Z",
       "trash",
       "nested",
