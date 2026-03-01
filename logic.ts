@@ -70,6 +70,16 @@ type KeeplistConfig = {
   renameDirectives: RenameDirective[];
 };
 
+function compareLexically(a: string, b: string): number {
+  if (a < b) {
+    return -1;
+  }
+  if (a > b) {
+    return 1;
+  }
+  return 0;
+}
+
 function validateKeeplistName(keeplistName: string): void {
   // Reject names with leading or trailing whitespace so that validation
   // and subsequent filesystem operations use the same literal value.
@@ -132,7 +142,7 @@ export async function listRelativeFiles(root: string): Promise<string[]> {
   const files = await walkFiles(root);
   return files
     .map((file) => normalizeRelativePath(root, file))
-    .sort((a, b) => a.localeCompare(b));
+    .sort(compareLexically);
 }
 
 export async function writeKeeplist(
@@ -153,7 +163,6 @@ function normalizeLiteralPath(input: string): string {
     normalized = normalized.slice(2);
   }
 
-  normalized = normalized.replace(/\/+/g, "/");
   return normalized;
 }
 
@@ -231,13 +240,15 @@ function parseKeeplist(text: string): KeeplistConfig {
   const lines = text.split(/\r?\n/);
   for (let index = 0; index < lines.length; index++) {
     const lineNumber = index + 1;
-    const line = lines[index].trim();
+    const rawLine = lines[index];
+    const line = rawLine.trim();
 
     if (!line) {
       continue;
     }
 
-    if (line.startsWith("# ")) {
+    // Only a literal "# " at the start of the line is a comment.
+    if (rawLine.startsWith("# ")) {
       continue;
     }
 
@@ -361,7 +372,7 @@ function collectCandidateParentDirs(removedFiles: string[]): string[] {
     if (depthA !== depthB) {
       return depthB - depthA;
     }
-    return a.localeCompare(b);
+    return compareLexically(a, b);
   });
 }
 
@@ -624,6 +635,8 @@ function validateScanPlanInput(plan: ScanPlan): ScanPlan {
     removableFiles.push(normalizedFile);
   }
 
+  const removableSet = new Set(removableFiles);
+
   for (const rename of plan.plannedRenames) {
     const from = validatePlanRelativePath(rename.from, "rename from");
     const to = validatePlanRelativePath(rename.to, "rename to");
@@ -643,6 +656,12 @@ function validateScanPlanInput(plan: ScanPlan): ScanPlan {
     if (seenTo.has(to)) {
       throw new Error(
         `Invalid scan plan: duplicate rename target path '${to}'.`,
+      );
+    }
+
+    if (removableSet.has(from) || removableSet.has(to)) {
+      throw new Error(
+        `Invalid scan plan: rename path overlaps removable file ('${removableSet.has(from) ? from : to}').`,
       );
     }
 

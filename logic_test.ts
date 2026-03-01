@@ -399,7 +399,32 @@ Deno.test("readKeeplist ignores '# ' comments but keeps literal # paths", async 
     );
 
     const rules = await readKeeplist(root);
-    assertEquals(rules, ["mods/**", "#mods/literal-starts-with-hash.txt"]);
+    assertEquals(rules, [
+      "mods/**",
+      "#mods/literal-starts-with-hash.txt",
+      "# another comment",
+    ]);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("listRelativeFiles uses fixed lexical ordering for mixed-case paths", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.mkdir(join(root, "mods"), { recursive: true });
+
+    await Deno.writeTextFile(join(root, "mods", "beta.txt"), "a");
+    await Deno.writeTextFile(join(root, "mods", "Alpha.txt"), "b");
+    await Deno.writeTextFile(join(root, "mods", "Zulu.txt"), "c");
+
+    const files = await listRelativeFiles(root);
+    assertEquals(files, [
+      "mods/Alpha.txt",
+      "mods/Zulu.txt",
+      "mods/beta.txt",
+    ]);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -690,6 +715,31 @@ Deno.test("cleanFromPlan rejects invalid rename paths in scan plan", async () =>
         cleanFromPlan(root, {
           removableFiles: [],
           plannedRenames: [{ from: "keep/file.txt", to: "../escape.txt" }],
+        }),
+      Error,
+      "Invalid scan plan",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan rejects removable files that overlap rename paths", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.mkdir(join(root, "restore"), { recursive: true });
+    await Deno.writeTextFile(join(root, "restore", "backup.bin"), "backup");
+    await Deno.writeTextFile(join(root, KEEPLIST_FILE), "keep/**\n");
+
+    await assertRejects(
+      () =>
+        cleanFromPlan(root, {
+          removableFiles: ["restore/backup.bin"],
+          plannedRenames: [{
+            from: "restore/backup.bin",
+            to: "restore/live.bin",
+          }],
         }),
       Error,
       "Invalid scan plan",
@@ -1538,6 +1588,24 @@ Deno.test("scanForRemoval rejects !rename with trailing slash path segment", asy
     await Deno.writeTextFile(
       join(root, KEEPLIST_FILE),
       ["mods/**", "!rename from/ -> to.txt"].join("\n"),
+    );
+
+    await assertRejects(
+      () => scanForRemoval(root),
+      Error,
+      "from path must be a clean relative path",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("scanForRemoval rejects !rename with empty path segments", async () => {
+  const root = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      join(root, KEEPLIST_FILE),
+      ["mods/**", "!rename restore//backup.bin -> restore/live.bin"].join("\n"),
     );
 
     await assertRejects(
