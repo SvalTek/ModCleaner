@@ -696,17 +696,27 @@ async function getKeeplistState(
   event: WebUI.Event,
 ): Promise<{ keeplistName: string; prefixError: string }> {
   const value = await event.window.script(`
-    return {
+    return JSON.stringify({
       keeplistName: getResolvedKeeplistName(),
       prefixError: getPrefixValidationError(),
-    };
+    });
   `);
 
-  if (typeof value !== "object" || value === null) {
+  if (typeof value !== "string") {
     return { keeplistName: resolveKeeplistName(null), prefixError: "" };
   }
 
-  const state = value as Record<string, unknown>;
+  let state: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(value);
+    if (typeof parsed !== "object" || parsed === null) {
+      return { keeplistName: resolveKeeplistName(null), prefixError: "" };
+    }
+    state = parsed as Record<string, unknown>;
+  } catch {
+    return { keeplistName: resolveKeeplistName(null), prefixError: "" };
+  }
+
   const keeplistName = typeof state.keeplistName === "string"
     ? state.keeplistName
     : resolveKeeplistName(null);
