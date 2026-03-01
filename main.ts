@@ -2,10 +2,11 @@ import { WebUI } from "WebUI";
 import { FileDialog, load as loadNativeDialog } from "@miyauci/rfd/deno";
 import {
   buildScanPlan,
-  cleanFolderDetailed,
+  cleanFromPlan,
   type CleanMode,
   QUARANTINE_DIR,
   resolveKeeplistName,
+  type ScanPlan,
   writeKeeplist,
 } from "./logic.ts";
 
@@ -392,7 +393,7 @@ button.danger:hover:not(:disabled) {
 
     <div class="mode-row">
       <label class="section-label" for="cleanMode" style="margin: 0; min-width: 130px;">Clean Mode</label>
-      <select id="cleanMode" onchange="updateCleanModeHelp()">
+      <select id="cleanMode" onchange="updateCleanModeHelp(); markScanDirty()">
         <option value="delete">Delete (permanent)</option>
         <option value="quarantine">Quarantine (move files)</option>
       </select>
@@ -788,6 +789,15 @@ async function getRootPath(event: WebUI.Event): Promise<string> {
 
 let lastScannedRoot: string | null = null;
 let lastScannedKeeplistName: string | null = null;
+let lastScannedMode: CleanMode | null = null;
+let lastScanPlan: ScanPlan | null = null;
+
+function resetCachedScanState(): void {
+  lastScannedRoot = null;
+  lastScannedKeeplistName = null;
+  lastScannedMode = null;
+  lastScanPlan = null;
+}
 
 async function browseFolder(event: WebUI.Event): Promise<void> {
   const currentPath = event.arg.string(0).trim();
@@ -810,8 +820,7 @@ async function browseFolder(event: WebUI.Event): Promise<void> {
         JSON.stringify(selectedPath)
       }; markScanDirty();`,
     );
-    lastScannedRoot = null;
-    lastScannedKeeplistName = null;
+    resetCachedScanState();
     runCleanReady(event, false);
     runStatus(event, "Folder selected", "success");
   } catch (error) {
@@ -836,8 +845,7 @@ async function generateKeeplist(event: WebUI.Event): Promise<void> {
   try {
     runBusy(event, true);
     const files = await writeKeeplist(root, keeplistName);
-    lastScannedRoot = null;
-    lastScannedKeeplistName = null;
+    resetCachedScanState();
     runCleanReady(event, false);
     runStatus(
       event,
@@ -865,9 +873,12 @@ async function scanFolder(event: WebUI.Event): Promise<void> {
 
   try {
     runBusy(event, true);
+    const mode = await getCleanMode(event);
     const plan = await buildScanPlan(root, keeplistName);
     lastScannedRoot = root;
     lastScannedKeeplistName = keeplistName;
+    lastScannedMode = mode;
+    lastScanPlan = plan;
     runCleanReady(event, true);
     runResults(event, plan.removableFiles, plan.plannedRenames);
     runStatus(
@@ -876,8 +887,7 @@ async function scanFolder(event: WebUI.Event): Promise<void> {
       "info",
     );
   } catch (error) {
-    lastScannedRoot = null;
-    lastScannedKeeplistName = null;
+    resetCachedScanState();
     runCleanReady(event, false);
     runStatus(event, `Failed to scan folder: ${String(error)}`, "error");
   } finally {
@@ -897,11 +907,18 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
     return;
   }
 
-  if (lastScannedRoot !== root || lastScannedKeeplistName !== keeplistName) {
+  const mode = await getCleanMode(event);
+
+  if (
+    !lastScanPlan ||
+    lastScannedRoot !== root ||
+    lastScannedKeeplistName !== keeplistName ||
+    lastScannedMode !== mode
+  ) {
     runCleanReady(event, false);
     runStatus(
       event,
-      "Run Scan first for the current folder, then review the results before cleaning.",
+      "Run Scan first for the current folder, keeplist, and clean mode, then review the results before cleaning.",
       "error",
     );
     return;
@@ -913,11 +930,9 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
     return;
   }
 
-  const mode = await getCleanMode(event);
-
   try {
     runBusy(event, true);
-    const result = await cleanFolderDetailed(root, { mode, keeplistName });
+    const result = await cleanFromPlan(root, lastScanPlan, { mode });
     const appliedRenames = result.renameResults.filter((rename) =>
       rename.applied
     )
@@ -951,8 +966,7 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
   } catch (error) {
     runStatus(event, `Failed to clean folder: ${String(error)}`, "error");
   } finally {
-    lastScannedRoot = null;
-    lastScannedKeeplistName = null;
+    resetCachedScanState();
     runCleanReady(event, false);
     runBusy(event, false);
   }

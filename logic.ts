@@ -60,6 +60,10 @@ export type CleanFolderDetailedOptions = {
   keeplistName?: string;
 };
 
+export type CleanFromPlanOptions = {
+  mode?: CleanMode;
+};
+
 type KeeplistConfig = {
   keepRules: string[];
   renameDirectives: RenameDirective[];
@@ -556,6 +560,14 @@ export async function cleanFolderDetailed(
   options: CleanFolderDetailedOptions = {},
 ): Promise<CleanResult> {
   const plan = await buildScanPlan(root, options.keeplistName ?? KEEPLIST_FILE);
+  return cleanFromPlan(root, plan, { mode: options.mode });
+}
+
+export async function cleanFromPlan(
+  root: string,
+  plan: ScanPlan,
+  options: CleanFromPlanOptions = {},
+): Promise<CleanResult> {
   const mode = options.mode ?? "delete";
 
   if (mode !== "delete" && mode !== "quarantine") {
