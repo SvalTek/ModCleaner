@@ -229,9 +229,10 @@ deno task build
 
 Manual UI regression check for scan/clean results rendering:
 
-1. Create a test file whose name includes `<` and `>` in the target game folder.
-2. Run `Scan` so the file appears under `Files To Remove`.
-3. Confirm the results list renders the filename literally (including angle brackets) instead of interpreting it as HTML.
+1. Create a removable test file whose name includes `&` in the target game folder.
+2. Add a `!rename` directive to `#keeplist.txt` whose `from` or `to` includes `<test>` text, for example `!rename folder/source.txt -> folder/<test>.txt`.
+3. Run `Scan` so the file appears under `Files To Remove` and the directive appears under `Planned Renames`.
+4. Confirm both sections render the special characters literally instead of interpreting them as HTML.
 
 ## Project Structure
 
