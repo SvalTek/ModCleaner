@@ -1,6 +1,12 @@
 import { WebUI } from "WebUI";
 import { FileDialog, load as loadNativeDialog } from "@miyauci/rfd/deno";
-import { buildScanPlan, cleanFolderDetailed, writeKeeplist } from "./logic.ts";
+import {
+  buildScanPlan,
+  cleanFolderDetailed,
+  type CleanMode,
+  QUARANTINE_DIR,
+  writeKeeplist,
+} from "./logic.ts";
 
 const html = `<!DOCTYPE html>
 <html>
@@ -95,6 +101,22 @@ input {
   color: var(--text);
   font-size: 14px;
 }
+select {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #181b21;
+  color: var(--text);
+  font-size: 14px;
+}
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
 input:focus {
   outline: none;
   border-color: var(--accent);
@@ -139,6 +161,17 @@ button.danger:hover:not(:disabled) {
   margin-top: 12px;
   display: flex;
   gap: 10px;
+}
+.mode-row {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.mode-help {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
 }
 .actions .danger-wrap {
   margin-left: auto;
@@ -308,6 +341,15 @@ button.danger:hover:not(:disabled) {
       </div>
     </div>
 
+    <div class="mode-row">
+      <label class="section-label" for="cleanMode" style="margin: 0; min-width: 130px;">Clean Mode</label>
+      <select id="cleanMode" onchange="updateCleanModeHelp()">
+        <option value="delete">Delete (permanent)</option>
+        <option value="quarantine">Quarantine (move files)</option>
+      </select>
+    </div>
+    <div class="mode-help" id="cleanModeHelp"></div>
+
     <div class="status" id="status" data-type="info">Idle</div>
 
     <details class="details">
@@ -331,7 +373,7 @@ button.danger:hover:not(:disabled) {
         <hr />
         <div><code>Scan</code> checks the folder against <code>#keeplist.txt</code> and lists files that would be removed.</div>
         <div><code>Scan</code> and <code>Clean</code> require <code>#keeplist.txt</code> to exist and contain at least one rule.</div>
-        <div><code>Clean</code> permanently deletes files not matching any keep rule. Use with caution.</div>
+        <div><code>Clean</code> can permanently delete files or move them into <code>${QUARANTINE_DIR}/&lt;timestamp&gt;</code>.</div>
       </div>
     </details>
   </section>
@@ -373,6 +415,26 @@ function setBusy(isBusy) {
       el.disabled = busy || (id === "cleanButton" && !cleanReady);
     }
   });
+}
+
+function getSelectedCleanMode() {
+  const mode = document.getElementById("cleanMode")?.value;
+  return mode === "quarantine" ? "quarantine" : "delete";
+}
+
+function updateCleanModeHelp() {
+  const mode = getSelectedCleanMode();
+  const help = document.getElementById("cleanModeHelp");
+  if (!help) {
+    return;
+  }
+
+  if (mode === "delete") {
+    help.innerText = "Warning: Delete mode permanently removes files after confirmation.";
+    return;
+  }
+
+  help.innerText = "Quarantine mode moves removable files to ${QUARANTINE_DIR}/<timestamp>/ under the selected game folder.";
 }
 function setCleanReady(isReady) {
   cleanReady = Boolean(isReady);
@@ -467,6 +529,7 @@ document.addEventListener("keydown", (event) => {
 
 setResults({ removals: [], renames: [] });
 setCleanReady(false);
+updateCleanModeHelp();
 </script>
 </body>
 </html>
@@ -477,7 +540,9 @@ function runStatus(
   message: string,
   type: "info" | "success" | "error" = "info",
 ): void {
-  event.window.run(`setStatus(${JSON.stringify(message)}, ${JSON.stringify(type)})`);
+  event.window.run(
+    `setStatus(${JSON.stringify(message)}, ${JSON.stringify(type)})`,
+  );
 }
 
 function runBusy(event: WebUI.Event, isBusy: boolean): void {
@@ -489,16 +554,29 @@ function runCleanReady(event: WebUI.Event, isReady: boolean): void {
 }
 
 async function showCleanupConfirmation(event: WebUI.Event): Promise<boolean> {
+  const mode = await getCleanMode(event);
+  const message = mode === "delete"
+    ? "Delete mode permanently removes files that are not covered by #keeplist.txt. Continue?"
+    : `Quarantine mode moves removable files to ${QUARANTINE_DIR}/<timestamp>/ inside the selected game folder. Continue?`;
+
   const confirmedValue: unknown = await event.window.script(`
     return showConfirmDialog(
       "Confirm Cleanup",
-      "This will permanently delete files that are not covered by #keeplist.txt. Continue?",
+      ${JSON.stringify(message)},
       "Clean"
     );
   `);
 
   return confirmedValue === true ||
     (typeof confirmedValue === "string" && confirmedValue === "true");
+}
+
+async function getCleanMode(event: WebUI.Event): Promise<CleanMode> {
+  const value = await event.window.script(
+    "return (document.getElementById('cleanMode')?.value || 'delete');",
+  );
+
+  return value === "quarantine" ? "quarantine" : "delete";
 }
 
 function runResults(
@@ -566,7 +644,11 @@ async function generateKeeplist(event: WebUI.Event): Promise<void> {
     const files = await writeKeeplist(root);
     lastScannedRoot = null;
     runCleanReady(event, false);
-    runStatus(event, `#keeplist.txt generated (${files.length} entries)`, "success");
+    runStatus(
+      event,
+      `#keeplist.txt generated (${files.length} entries)`,
+      "success",
+    );
   } catch (error) {
     runStatus(event, `Failed to generate keeplist: ${String(error)}`, "error");
   } finally {
@@ -624,10 +706,14 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
     return;
   }
 
+  const mode = await getCleanMode(event);
+
   try {
     runBusy(event, true);
-    const result = await cleanFolderDetailed(root);
-    const appliedRenames = result.renameResults.filter((rename) => rename.applied)
+    const result = await cleanFolderDetailed(root, { mode });
+    const appliedRenames = result.renameResults.filter((rename) =>
+      rename.applied
+    )
       .length;
     const missingSourceRenames = result.renameResults.filter((rename) =>
       rename.reason === "missing_source"
@@ -643,9 +729,12 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
         to: rename.to,
       })),
     );
+    const modeSummary = result.mode === "quarantine" && result.quarantineRunId
+      ? `quarantined at ${QUARANTINE_DIR}/${result.quarantineRunId}`
+      : "deleted permanently";
     runStatus(
       event,
-      `Cleanup complete (${result.removedFiles.length} file(s) removed, renames: ${appliedRenames} applied, ${missingSourceRenames} missing source, ${targetExistsRenames} target exists)`,
+      `Cleanup complete (${result.removedFiles.length} file(s) ${modeSummary}, renames: ${appliedRenames} applied, ${missingSourceRenames} missing source, ${targetExistsRenames} target exists)`,
       "success",
     );
   } catch (error) {
@@ -668,4 +757,3 @@ win.bind("cleanFiles", cleanFiles);
 
 await win.showBrowser(html, WebUI.Browser.AnyBrowser);
 await WebUI.wait();
-
