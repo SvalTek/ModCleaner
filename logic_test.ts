@@ -1,7 +1,9 @@
 import {
+  assertKeeplistReady,
   buildScanPlan,
   cleanFolder,
   cleanFolderDetailed,
+  cleanFromPlan,
   GENERATED_KEEPLIST_HEADER,
   getRemovableFiles,
   isKept,
@@ -498,6 +500,252 @@ Deno.test("scan plan includes planned renames", async () => {
         to: "Game/Binaries/Win64/exchndl.dll",
       },
     ]);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan executes exactly the previously built scan plan", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.mkdir(join(root, "keep"), { recursive: true });
+    await Deno.mkdir(join(root, "trash"), { recursive: true });
+    await Deno.mkdir(join(root, "restore"), { recursive: true });
+
+    await Deno.writeTextFile(join(root, "keep", "stay.txt"), "keep");
+    await Deno.writeTextFile(join(root, "trash", "planned.tmp"), "planned");
+    await Deno.writeTextFile(join(root, "restore", "backup.bin"), "backup");
+
+    await Deno.writeTextFile(
+      join(root, KEEPLIST_FILE),
+      [
+        "keep/**",
+        "!rename restore/backup.bin -> restore/live.bin",
+      ].join("\n"),
+    );
+
+    const plan = await buildScanPlan(root);
+
+    await Deno.writeTextFile(
+      join(root, "trash", "added-after-scan.tmp"),
+      "late",
+    );
+
+    const result = await cleanFromPlan(root, plan);
+    assertEquals(result.removedFiles, ["trash/planned.tmp"]);
+    assertEquals(result.renameResults, [
+      {
+        from: "restore/backup.bin",
+        to: "restore/live.bin",
+        applied: true,
+      },
+    ]);
+
+    const lateFileExists = await Deno.stat(
+      join(root, "trash", "added-after-scan.tmp"),
+    )
+      .then(() => true)
+      .catch(() => false);
+    assertEquals(lateFileExists, true);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan validates clean mode values", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    const invalidOptions = { mode: "archive" } as unknown as {
+      mode?: "delete" | "quarantine";
+    };
+
+    await assertRejects(
+      () =>
+        cleanFromPlan(
+          root,
+          { removableFiles: [], plannedRenames: [] },
+          invalidOptions,
+        ),
+      Error,
+      "Invalid clean mode: archive",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan fails with explicit error when current keeplist is missing", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.writeTextFile(join(root, "trash.tmp"), "remove");
+    await Deno.writeTextFile(join(root, KEEPLIST_FILE), "keep/**\n");
+
+    const plan = await buildScanPlan(root);
+    await Deno.remove(join(root, KEEPLIST_FILE));
+
+    await assertRejects(
+      () => cleanFromPlan(root, plan),
+      Error,
+      "#keeplist.txt not found",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan fails with explicit error when current keeplist has no keep rules", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.writeTextFile(join(root, "trash.tmp"), "remove");
+    await Deno.writeTextFile(join(root, KEEPLIST_FILE), "keep/**\n");
+
+    const plan = await buildScanPlan(root);
+    await Deno.writeTextFile(join(root, KEEPLIST_FILE), "\n");
+
+    await assertRejects(
+      () => cleanFromPlan(root, plan),
+      Error,
+      "#keeplist.txt is empty",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("assertKeeplistReady fails with explicit error when keeplist is missing", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await assertRejects(
+      () => assertKeeplistReady(root),
+      Error,
+      "#keeplist.txt not found",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("assertKeeplistReady fails with explicit error when keeplist has no keep rules", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.writeTextFile(join(root, KEEPLIST_FILE), "\n");
+    await assertRejects(
+      () => assertKeeplistReady(root),
+      Error,
+      "#keeplist.txt is empty",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan rejects traversal paths in removable files", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await assertRejects(
+      () =>
+        cleanFromPlan(root, {
+          removableFiles: ["../outside.txt"],
+          plannedRenames: [],
+        }),
+      Error,
+      "Invalid scan plan",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan rejects protected keeplist targets in removable files", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await assertRejects(
+      () =>
+        cleanFromPlan(root, {
+          removableFiles: ["#keeplist.txt"],
+          plannedRenames: [],
+        }),
+      Error,
+      "is protected",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan rejects invalid rename paths in scan plan", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await assertRejects(
+      () =>
+        cleanFromPlan(root, {
+          removableFiles: [],
+          plannedRenames: [{ from: "keep/file.txt", to: "../escape.txt" }],
+        }),
+      Error,
+      "Invalid scan plan",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan ignores planned removals that are already missing", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.mkdir(join(root, "trash"), { recursive: true });
+    await Deno.mkdir(join(root, "restore"), { recursive: true });
+    await Deno.writeTextFile(join(root, "trash", "remove.tmp"), "remove");
+    await Deno.writeTextFile(join(root, "restore", "backup.bin"), "backup");
+    await Deno.writeTextFile(
+      join(root, KEEPLIST_FILE),
+      [
+        "keep/**",
+        "!rename restore/backup.bin -> restore/live.bin",
+      ].join("\n"),
+    );
+
+    const plan = await buildScanPlan(root);
+    await Deno.remove(join(root, "trash", "remove.tmp"));
+
+    const result = await cleanFromPlan(root, plan);
+    assertEquals(result.removedFiles, []);
+    assertEquals(result.renameResults, [
+      {
+        from: "restore/backup.bin",
+        to: "restore/live.bin",
+        applied: true,
+      },
+    ]);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFromPlan quarantine mode ignores planned removals that are already missing", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.mkdir(join(root, "trash"), { recursive: true });
+    await Deno.writeTextFile(join(root, "trash", "remove.tmp"), "remove");
+    await Deno.writeTextFile(join(root, KEEPLIST_FILE), "keep/**\n");
+
+    const plan = await buildScanPlan(root);
+    await Deno.remove(join(root, "trash", "remove.tmp"));
+
+    const result = await cleanFromPlan(root, plan, { mode: "quarantine" });
+    assertEquals(result.removedFiles, []);
+    assertEquals(result.quarantineRunId, undefined);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
