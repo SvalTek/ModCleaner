@@ -72,6 +72,10 @@ Deno.test("getRemovableFiles never removes #keeplist.txt", () => {
 Deno.test("resolveKeeplistName uses default and prefixed keeplist names deterministically", () => {
   assertEquals(resolveKeeplistName(null), "#keeplist.txt");
   assertEquals(resolveKeeplistName("vanilla"), "#vanilla-keeplist.txt");
+  assertEquals(
+    resolveKeeplistName("Vanilla_Profile"),
+    "#Vanilla_Profile-keeplist.txt",
+  );
 });
 
 Deno.test("getRemovableFiles never removes the active prefixed keeplist", () => {
