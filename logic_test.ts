@@ -1162,12 +1162,12 @@ Deno.test("scanForRemoval treats !rename-prefixed literals as keep rules", async
   }
 });
 
-Deno.test("scanForRemoval still rejects malformed true !rename directives", async () => {
+Deno.test("scanForRemoval rejects malformed !rename directives with tab after token", async () => {
   const root = await Deno.makeTempDir();
   try {
     await Deno.writeTextFile(
       join(root, KEEPLIST_FILE),
-      ["mods/**", "!rename from.txt to.txt"].join("\n"),
+      ["mods/**", "!rename\tfrom.txt to.txt"].join("\n"),
     );
 
     await assertRejects(
