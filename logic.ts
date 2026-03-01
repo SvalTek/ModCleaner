@@ -66,13 +66,21 @@ type KeeplistConfig = {
 };
 
 function validateKeeplistName(keeplistName: string): void {
-  keeplistName = keeplistName.trim();
+  // Reject names with leading or trailing whitespace so that validation
+  // and subsequent filesystem operations use the same literal value.
+  if (keeplistName !== keeplistName.trim()) {
+    throw new Error(
+      `Invalid keeplist name: ${keeplistName}. Leading or trailing whitespace is not allowed.`,
+    );
+  }
+
+  const normalized = keeplistName.trim();
   if (
-    keeplistName !== KEEPLIST_FILE &&
-    !/^#[A-Za-z0-9_-]+-keeplist\.txt$/.test(keeplistName)
+    normalized !== KEEPLIST_FILE &&
+    !/^#[A-Za-z0-9_-]+-keeplist\.txt$/.test(normalized)
   ) {
     throw new Error(
-      `Invalid keeplist name: ${keeplistName}. Expected #keeplist.txt or #<prefix>-keeplist.txt.`,
+      `Invalid keeplist name: ${normalized}. Expected #keeplist.txt or #<prefix>-keeplist.txt.`,
     );
   }
 }

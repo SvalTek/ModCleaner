@@ -936,8 +936,12 @@ async function cleanFiles(event: WebUI.Event): Promise<void> {
         to: rename.to,
       })),
     );
-    const modeSummary = result.mode === "quarantine" && result.quarantineRunId
-      ? `quarantined at ${QUARANTINE_DIR}/${result.quarantineRunId}`
+    const modeSummary = result.removedFiles.length === 0
+      ? "not removed (no files to clean)"
+      : result.mode === "quarantine"
+      ? (result.quarantineRunId
+        ? `quarantined at ${QUARANTINE_DIR}/${result.quarantineRunId}`
+        : "quarantined")
       : "deleted permanently";
     runStatus(
       event,
