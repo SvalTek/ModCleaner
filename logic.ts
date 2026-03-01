@@ -8,6 +8,7 @@ import {
 } from "@std/path";
 
 export const KEEPLIST_FILE = "#keeplist.txt";
+export const QUARANTINE_DIR = ".modcleaner_quarantine";
 export const GENERATED_KEEPLIST_HEADER = [
   "# This file defines which files should be preserved during the Clean operation.",
   "# The !rename directive specifies a literal backup restore rule.",
@@ -74,6 +75,10 @@ export async function walkFiles(root: string): Promise<string[]> {
         continue;
       }
       if (entry.isDirectory) {
+        const relPath = relative(root, fullPath).replaceAll("\\", "/");
+        if (relPath === QUARANTINE_DIR || relPath.startsWith(`${QUARANTINE_DIR}/`)) {
+          continue;
+        }
         await walk(fullPath);
       }
     }
@@ -464,9 +469,13 @@ function buildQuarantineRunId(): string {
 async function quarantineFiles(
   root: string,
   removableFiles: string[],
-): Promise<string> {
+): Promise<string | undefined> {
+  if (removableFiles.length === 0) {
+    return undefined;
+  }
+
   const runId = buildQuarantineRunId();
-  const quarantineRoot = join(root, ".modcleaner_quarantine", runId);
+  const quarantineRoot = join(root, QUARANTINE_DIR, runId);
 
   for (const file of removableFiles) {
     const sourcePath = join(root, file);

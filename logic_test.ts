@@ -9,6 +9,7 @@ import {
   listRelativeFiles,
   matchesKeepRule,
   normalizeRelativePath,
+  QUARANTINE_DIR,
   readKeeplist,
   scanForRemoval,
   writeKeeplist,
@@ -424,7 +425,7 @@ Deno.test("cleanFolderDetailed quarantine mode moves files into deterministic ru
 
     const quarantinedPath = join(
       root,
-      ".modcleaner_quarantine",
+      QUARANTINE_DIR,
       "2026-01-02T03-04-05.678Z",
       "trash",
       "nested",
@@ -473,6 +474,52 @@ Deno.test("cleanFolderDetailed quarantine mode still applies renames after remov
       .then(() => true)
       .catch(() => false);
     assertEquals(renamedTargetExists, true);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("cleanFolderDetailed quarantine mode returns undefined runId when no files are removed", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.mkdir(join(root, "keep"), { recursive: true });
+    await Deno.writeTextFile(join(root, "keep", "stay.txt"), "keep");
+    await Deno.writeTextFile(join(root, KEEPLIST_FILE), "keep/**\n");
+
+    const result = await cleanFolderDetailed(root, { mode: "quarantine" });
+    assertEquals(result.mode, "quarantine");
+    assertEquals(result.quarantineRunId, undefined);
+    assertEquals(result.removedFiles, []);
+
+    const quarantineDirExists = await Deno.stat(join(root, QUARANTINE_DIR))
+      .then(() => true)
+      .catch(() => false);
+    assertEquals(quarantineDirExists, false);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("listRelativeFiles and buildScanPlan exclude quarantine directory", async () => {
+  const root = await Deno.makeTempDir();
+
+  try {
+    await Deno.mkdir(join(root, "keep"), { recursive: true });
+    await Deno.mkdir(join(root, QUARANTINE_DIR, "2026-01-01T00-00-00.000Z", "trash"), { recursive: true });
+
+    await Deno.writeTextFile(join(root, "keep", "stay.txt"), "keep");
+    await Deno.writeTextFile(
+      join(root, QUARANTINE_DIR, "2026-01-01T00-00-00.000Z", "trash", "old.tmp"),
+      "old",
+    );
+    await Deno.writeTextFile(join(root, KEEPLIST_FILE), "keep/**\n");
+
+    const files = await listRelativeFiles(root);
+    assertEquals(files.includes(`${QUARANTINE_DIR}/2026-01-01T00-00-00.000Z/trash/old.tmp`), false);
+
+    const plan = await buildScanPlan(root);
+    assertEquals(plan.removableFiles.some((f) => f.startsWith(QUARANTINE_DIR)), false);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
