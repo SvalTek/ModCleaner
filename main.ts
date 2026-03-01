@@ -577,6 +577,14 @@ function setCleanReady(isReady) {
 function markScanDirty() {
   setCleanReady(false);
 }
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
 function setResults(data) {
   const el = document.getElementById("fileList");
   const rows = [];
@@ -590,7 +598,7 @@ function setResults(data) {
   if (renames.length === 0) {
     rows.push(\`<div class="result-row result-empty">No renames planned</div>\`);
   } else {
-    rows.push(...renames.map((rename) => \`<div class="result-row">\${rename.from} -> \${rename.to}</div>\`));
+    rows.push(...renames.map((rename) => \`<div class="result-row">\${escapeHtml(rename.from)} -> \${escapeHtml(rename.to)}</div>\`));
   }
   rows.push(\`</div></div>\`);
 
@@ -600,7 +608,7 @@ function setResults(data) {
   if (removals.length === 0) {
     rows.push(\`<div class="result-row result-empty">No files to remove</div>\`);
   } else {
-    rows.push(...removals.map((file) => \`<div class="result-row">\${file}</div>\`));
+    rows.push(...removals.map((file) => \`<div class="result-row">\${escapeHtml(file)}</div>\`));
   }
   rows.push(\`</div></div>\`);
 
